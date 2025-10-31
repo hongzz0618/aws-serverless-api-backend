@@ -1,4 +1,13 @@
-# 🔗 AWS Serverless API Backend
+## 🧭 Repository Context
+
+This repository is part of a modularization effort to separate each of the **8 most common AWS architectures** into independent projects.  
+The code and resources here were **extracted from a general repository** that originally contained all 8 architectures, to improve clarity, maintainability, and reuse.
+
+🔗 [Original Repository – AWS Architectures Collection](https://github.com/hongzz0618/aws-architecture-collection)
+
+---
+
+## 🔗 AWS Serverless API Backend
 
 This project shows how to build a **serverless API** on AWS.  
 It uses **API Gateway**, **AWS Lambda**, and **Amazon DynamoDB** to create a fully managed backend — no servers to maintain.

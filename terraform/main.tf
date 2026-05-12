@@ -48,6 +48,11 @@ resource "aws_iam_role_policy" "lambda_dynamodb_items" {
 }
 
 # Lambda Functions
+resource "aws_cloudwatch_log_group" "create_item" {
+  name              = "/aws/lambda/${var.project_name}-create"
+  retention_in_days = 7
+}
+
 resource "aws_lambda_function" "create_item" {
   function_name = "${var.project_name}-create"
   role          = aws_iam_role.lambda_exec.arn
@@ -62,6 +67,13 @@ resource "aws_lambda_function" "create_item" {
       TABLE_NAME = aws_dynamodb_table.items.name
     }
   }
+
+  depends_on = [aws_cloudwatch_log_group.create_item]
+}
+
+resource "aws_cloudwatch_log_group" "get_item" {
+  name              = "/aws/lambda/${var.project_name}-get"
+  retention_in_days = 7
 }
 
 resource "aws_lambda_function" "get_item" {
@@ -78,6 +90,13 @@ resource "aws_lambda_function" "get_item" {
       TABLE_NAME = aws_dynamodb_table.items.name
     }
   }
+
+  depends_on = [aws_cloudwatch_log_group.get_item]
+}
+
+resource "aws_cloudwatch_log_group" "delete_item" {
+  name              = "/aws/lambda/${var.project_name}-delete"
+  retention_in_days = 7
 }
 
 resource "aws_lambda_function" "delete_item" {
@@ -94,6 +113,8 @@ resource "aws_lambda_function" "delete_item" {
       TABLE_NAME = aws_dynamodb_table.items.name
     }
   }
+
+  depends_on = [aws_cloudwatch_log_group.delete_item]
 }
 
 # API Gateway

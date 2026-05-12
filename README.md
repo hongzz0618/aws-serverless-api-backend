@@ -209,7 +209,7 @@ Current security considerations:
 
 ## Observability
 
-The Lambda execution role includes the AWS managed basic Lambda execution policy, which allows Lambda logs to be written to CloudWatch Logs.
+The Lambda execution role includes the AWS managed basic Lambda execution policy, which allows Lambda logs to be written to CloudWatch Logs. Lambda CloudWatch log groups are managed by Terraform with 7-day retention for cost control.
 
 Useful observability areas for this architecture include:
 
@@ -229,7 +229,7 @@ Cost drivers include:
 - API Gateway request volume
 - Lambda request count and execution duration
 - DynamoDB read/write usage with on-demand billing
-- CloudWatch log ingestion and retention
+- CloudWatch log ingestion and 7-day retention
 - Any additional observability or tracing added later
 
 After testing, run `terraform destroy` to remove the deployed resources.

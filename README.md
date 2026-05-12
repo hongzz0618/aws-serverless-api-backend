@@ -209,8 +209,7 @@ Current security considerations:
 
 - API Gateway methods currently use `authorization = "NONE"`.
 - The API is publicly reachable when deployed unless additional controls are added.
-- The Lambda role currently attaches `AmazonDynamoDBFullAccess`, which should be tightened for least privilege.
-- DynamoDB permissions should be limited to the required table and actions, such as `PutItem`, `GetItem`, and `DeleteItem`.
+- The Lambda execution role uses a least-privilege inline IAM policy scoped to the project DynamoDB table, allowing only `PutItem`, `GetItem`, and `DeleteItem`.
 - Secrets should not be hardcoded in Terraform, Lambda code, or committed configuration files.
 - Request validation and input validation should be added before exposing this pattern to real users.
 
@@ -254,7 +253,7 @@ Current limitations:
 - No Terraform remote state configuration
 - No environment separation such as `dev`, `staging`, and `prod`
 - Lambda zip packaging is manual
-- IAM permissions are broader than needed for a hardened implementation
+- IAM access to DynamoDB has been scoped to the project table, but broader API security controls such as authentication and request validation are still not implemented.
 
 ## Future Improvements
 
@@ -266,7 +265,7 @@ Potential improvements:
 - Add stronger input validation
 - Add SQS and a dead-letter queue for asynchronous processing patterns
 - Add CloudWatch alarms for operational signals
-- Replace broad DynamoDB permissions with stricter IAM policies
+- Further refine IAM and API Gateway security controls as the project evolves
 - Add a CI/CD pipeline
 - Configure Terraform remote state
 - Add environment separation
@@ -301,7 +300,7 @@ This project demonstrates a basic serverless CRUD API on AWS. API Gateway expose
 
 2-minute explanation:
 
-The API uses API Gateway as the public entry point and forwards requests to separate Node.js Lambda handlers. The create handler writes a new item to DynamoDB using a generated UUID, the get handler reads an item by ID, and the delete handler removes an item by ID. Terraform defines the DynamoDB table, Lambda functions, IAM role, API Gateway resources, methods, integrations, deployment stage, and output URL. This is a good fit for lightweight APIs because it avoids server management and uses pay-per-use services, but it would need authentication, stricter IAM, validation, automated tests, and observability alarms before being treated as production-ready.
+The API uses API Gateway as the public entry point and forwards requests to separate Node.js Lambda handlers. The create handler writes a new item to DynamoDB using a generated UUID, the get handler reads an item by ID, and the delete handler removes an item by ID. Terraform defines the DynamoDB table, Lambda functions, IAM role, API Gateway resources, methods, integrations, deployment stage, and output URL. DynamoDB access has been improved with a least-privilege IAM policy scoped to the project table, while authentication, validation, automated tests, and observability alarms remain future improvements before this pattern should be treated as production-ready.
 
 Likely follow-up questions:
 

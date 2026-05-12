@@ -45,7 +45,7 @@ Example use cases include:
 The current implementation provisions:
 
 - A DynamoDB table with `id` as the partition key
-- Three Lambda functions written in Node.js
+- Three Lambda functions written in TypeScript and compiled for Node.js Lambda
 - API Gateway REST API resources and methods
 - Lambda permissions allowing API Gateway to invoke the functions
 - A `dev` API Gateway stage
@@ -81,9 +81,9 @@ Client -> API Gateway -> Lambda -> DynamoDB -> Lambda -> API Gateway -> Client
 
 | File | Responsibility |
 | --- | --- |
-| `lambdas/createItem.js` | Creates a new item with a generated UUID, `name`, and `createdAt` timestamp |
-| `lambdas/getItem.js` | Retrieves an item by `id` from DynamoDB |
-| `lambdas/deleteItem.js` | Deletes an item by `id` from DynamoDB |
+| `lambdas/createItem.ts` | Creates a new item with a generated UUID, `name`, and `createdAt` timestamp |
+| `lambdas/getItem.ts` | Retrieves an item by `id` from DynamoDB |
+| `lambdas/deleteItem.ts` | Deletes an item by `id` from DynamoDB |
 
 ## API Routes
 
@@ -91,9 +91,9 @@ The routes below are defined in `terraform/main.tf`:
 
 | Method | Route | Lambda Handler | Description |
 | --- | --- | --- | --- |
-| `POST` | `/items` | `createItem.js` | Creates a new item |
-| `GET` | `/items/{id}` | `getItem.js` | Retrieves an item by ID |
-| `DELETE` | `/items/{id}` | `deleteItem.js` | Deletes an item by ID |
+| `POST` | `/items` | `createItem.ts` | Creates a new item |
+| `GET` | `/items/{id}` | `getItem.ts` | Retrieves an item by ID |
+| `DELETE` | `/items/{id}` | `deleteItem.ts` | Deletes an item by ID |
 
 The API is deployed to the `dev` stage.
 
@@ -159,7 +159,7 @@ Package the Lambda functions from the repository root:
 bash scripts/package-lambdas.sh
 ```
 
-The packaging script installs dependencies, removes old Lambda zip files, and creates the zip files required by Terraform.
+The packaging script installs dependencies, compiles the TypeScript handlers into `lambdas/dist/`, removes old Lambda zip files, and creates the zip files required by Terraform. Each zip contains the compiled handler JavaScript at the zip root so the Terraform Lambda handler names remain unchanged.
 Windows users should run this script from WSL or Git Bash with `zip` available on `PATH`.
 
 The Terraform configuration expects these zip files to exist in the `lambdas` directory:

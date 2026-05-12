@@ -1,10 +1,13 @@
+import type { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
 import { DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
 
 const client = new DynamoDBClient();
 
-export const handler = async (event) => {
+export const handler = async (
+  event: APIGatewayProxyEvent
+): Promise<APIGatewayProxyResult> => {
   try {
-    const id = event.pathParameters.id;
+    const id = event.pathParameters!.id as string;
 
     const result = await client.send(
       new GetItemCommand({

@@ -42,3 +42,5 @@ desktop.ini
 
 node_modules/
 *.zip
+lambdas/dist/
+lambdas/.package-tmp/

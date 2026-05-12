@@ -1,11 +1,14 @@
+import type { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
 import { DynamoDBClient, PutItemCommand } from "@aws-sdk/client-dynamodb";
 import { v4 as uuidv4 } from "uuid";
 
 const client = new DynamoDBClient();
 
-export const handler = async (event) => {
+export const handler = async (
+  event: APIGatewayProxyEvent
+): Promise<APIGatewayProxyResult> => {
   try {
-    const body = JSON.parse(event.body);
+    const body = JSON.parse(event.body as string);
     const id = uuidv4();
 
     await client.send(

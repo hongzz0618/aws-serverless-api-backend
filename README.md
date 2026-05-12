@@ -153,20 +153,14 @@ Prerequisites:
 - Terraform `>= 1.5.0`
 - Node.js/npm for installing Lambda dependencies
 
-Install Lambda dependencies:
+Package the Lambda functions from the repository root:
 
 ```bash
-cd lambdas
-npm install
+bash scripts/package-lambdas.sh
 ```
 
-Package the Lambda functions:
-
-```bash
-zip -r createItem.zip createItem.js package.json package-lock.json node_modules
-zip -r getItem.zip getItem.js package.json package-lock.json node_modules
-zip -r deleteItem.zip deleteItem.js package.json package-lock.json node_modules
-```
+The packaging script installs dependencies, removes old Lambda zip files, and creates the zip files required by Terraform.
+Windows users should run this script from WSL or Git Bash with `zip` available on `PATH`.
 
 The Terraform configuration expects these zip files to exist in the `lambdas` directory:
 
@@ -174,12 +168,12 @@ The Terraform configuration expects these zip files to exist in the `lambdas` di
 - `lambdas/getItem.zip`
 - `lambdas/deleteItem.zip`
 
-There is currently no deployment script in this repository, so Lambda packaging is a manual step.
+Run the packaging script before `terraform plan` or `terraform apply`.
 
 Deploy the infrastructure:
 
 ```bash
-cd ../terraform
+cd terraform
 terraform init
 terraform plan
 terraform apply
@@ -252,7 +246,7 @@ Current limitations:
 - No CI/CD pipeline
 - No Terraform remote state configuration
 - No environment separation such as `dev`, `staging`, and `prod`
-- Lambda zip packaging is manual
+- Lambda packaging is automated with a Bash script, but it is not yet integrated into CI/CD.
 - IAM access to DynamoDB has been scoped to the project table, but broader API security controls such as authentication and request validation are still not implemented.
 
 ## Future Improvements
@@ -270,7 +264,7 @@ Potential improvements:
 - Configure Terraform remote state
 - Add environment separation
 - Add automated tests for Lambda handlers
-- Automate Lambda packaging
+- Integrate Lambda packaging into CI/CD.
 
 ## Architecture Trade-offs
 
@@ -315,7 +309,7 @@ Likely follow-up questions:
 
 ## CV Bullet Draft
 
-- Built a Terraform-provisioned AWS serverless API backend using API Gateway, Node.js Lambda functions, and DynamoDB, including documented CRUD routes, architecture flow, deployment steps, and security/observability considerations for a cloud engineering portfolio.
+- Built a Terraform-provisioned AWS serverless API backend using API Gateway, Node.js Lambda functions, and DynamoDB, including least-privilege DynamoDB IAM, automated Lambda packaging, documented CRUD routes, and security/observability considerations for a cloud engineering portfolio.
 
 ## Cleanup / Destroy Instructions
 

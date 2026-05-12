@@ -1,20 +1,29 @@
 import type { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
-import { DynamoDBClient, DeleteItemCommand } from "@aws-sdk/client-dynamodb";
+import {
+  DeleteItemCommand,
+  DynamoDBClient,
+  type DeleteItemCommandInput,
+} from "@aws-sdk/client-dynamodb";
 
 const client = new DynamoDBClient();
+
+type PathParameters = {
+  id: string;
+};
 
 export const handler = async (
   event: APIGatewayProxyEvent
 ): Promise<APIGatewayProxyResult> => {
   try {
-    const id = event.pathParameters!.id as string;
+    const tableName: string | undefined = process.env.TABLE_NAME;
+    const pathParameters = event.pathParameters as PathParameters;
+    const id = pathParameters.id;
+    const input: DeleteItemCommandInput = {
+      TableName: tableName,
+      Key: { id: { S: id } },
+    };
 
-    await client.send(
-      new DeleteItemCommand({
-        TableName: process.env.TABLE_NAME,
-        Key: { id: { S: id } },
-      })
-    );
+    await client.send(new DeleteItemCommand(input));
 
     return {
       statusCode: 200,

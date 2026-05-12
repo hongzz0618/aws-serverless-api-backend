@@ -1,20 +1,34 @@
 import type { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
-import { DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
+import {
+  DynamoDBClient,
+  GetItemCommand,
+  type AttributeValue,
+  type GetItemCommandInput,
+} from "@aws-sdk/client-dynamodb";
 
 const client = new DynamoDBClient();
+
+type PathParameters = {
+  id: string;
+};
+
+type DynamoDBStringAttribute = AttributeValue.SMember;
+
+type StoredItem = Record<"id" | "name" | "createdAt", DynamoDBStringAttribute>;
 
 export const handler = async (
   event: APIGatewayProxyEvent
 ): Promise<APIGatewayProxyResult> => {
   try {
-    const id = event.pathParameters!.id as string;
+    const tableName: string | undefined = process.env.TABLE_NAME;
+    const pathParameters = event.pathParameters as PathParameters;
+    const id = pathParameters.id;
+    const input: GetItemCommandInput = {
+      TableName: tableName,
+      Key: { id: { S: id } },
+    };
 
-    const result = await client.send(
-      new GetItemCommand({
-        TableName: process.env.TABLE_NAME,
-        Key: { id: { S: id } },
-      })
-    );
+    const result = await client.send(new GetItemCommand(input));
 
     if (!result.Item) {
       return {
@@ -23,12 +37,14 @@ export const handler = async (
       };
     }
 
+    const item = result.Item as StoredItem;
+
     return {
       statusCode: 200,
       body: JSON.stringify({
-        id: result.Item.id.S,
-        name: result.Item.name.S,
-        createdAt: result.Item.createdAt.S,
+        id: item.id.S,
+        name: item.name.S,
+        createdAt: item.createdAt.S,
       }),
     };
   } catch (err) {

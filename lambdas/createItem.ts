@@ -2,10 +2,14 @@ import type { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
 import {
   DynamoDBClient,
   PutItemCommand,
-  type AttributeValue,
   type PutItemCommandInput,
 } from "@aws-sdk/client-dynamodb";
 import { v4 as uuidv4 } from "uuid";
+import type { CreateItemResponse } from "./src/types/api.js";
+import type { StoredItem } from "./src/types/item.js";
+import { getRequiredEnv } from "./src/utils/env.js";
+import { errorResponse, jsonResponse } from "./src/utils/http.js";
+import { parseJson } from "./src/utils/json.js";
 
 const client = new DynamoDBClient();
 
@@ -13,62 +17,41 @@ interface CreateItemRequestBody {
   name: string;
 }
 
-type DynamoDBStringAttribute = AttributeValue.SMember;
-
-type StoredItem = Record<"id" | "name" | "createdAt", DynamoDBStringAttribute>;
-
 export const handler = async (
   event: APIGatewayProxyEvent
 ): Promise<APIGatewayProxyResult> => {
   if (!event.body) {
-    return {
-      statusCode: 400,
-      body: JSON.stringify({ error: "Request body is required" }),
-    };
+    return errorResponse(400, "Request body is required");
   }
 
-  let parsedBody: unknown;
+  const parsedBody = parseJson(event.body);
 
-  try {
-    parsedBody = JSON.parse(event.body);
-  } catch {
-    return {
-      statusCode: 400,
-      body: JSON.stringify({ error: "Request body must be valid JSON" }),
-    };
+  if (!parsedBody.ok) {
+    return errorResponse(400, "Request body must be valid JSON");
   }
 
   if (
-    typeof parsedBody !== "object" ||
-    parsedBody === null ||
-    !("name" in parsedBody)
+    typeof parsedBody.value !== "object" ||
+    parsedBody.value === null ||
+    !("name" in parsedBody.value)
   ) {
-    return {
-      statusCode: 400,
-      body: JSON.stringify({ error: "Name is required" }),
-    };
+    return errorResponse(400, "Name is required");
   }
 
-  const body = parsedBody as Partial<CreateItemRequestBody>;
+  const body = parsedBody.value as Partial<CreateItemRequestBody>;
 
   if (typeof body.name !== "string") {
-    return {
-      statusCode: 400,
-      body: JSON.stringify({ error: "Name must be a string" }),
-    };
+    return errorResponse(400, "Name must be a string");
   }
 
   const name = body.name.trim();
 
   if (!name) {
-    return {
-      statusCode: 400,
-      body: JSON.stringify({ error: "Name cannot be empty" }),
-    };
+    return errorResponse(400, "Name cannot be empty");
   }
 
   try {
-    const tableName: string | undefined = process.env.TABLE_NAME;
+    const tableName = getRequiredEnv("TABLE_NAME");
     const id = uuidv4();
     const item: StoredItem = {
       id: { S: id },
@@ -82,15 +65,9 @@ export const handler = async (
 
     await client.send(new PutItemCommand(input));
 
-    return {
-      statusCode: 201,
-      body: JSON.stringify({ message: "Item created", id }),
-    };
+    return jsonResponse<CreateItemResponse>(201, { message: "Item created", id });
   } catch (err) {
     console.error(err);
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ error: "Failed to create item" }),
-    };
+    return errorResponse(500, "Failed to create item");
   }
 };

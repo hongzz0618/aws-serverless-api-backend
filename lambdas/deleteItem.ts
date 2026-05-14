@@ -4,6 +4,9 @@ import {
   DynamoDBClient,
   type DeleteItemCommandInput,
 } from "@aws-sdk/client-dynamodb";
+import type { DeleteItemResponse } from "./src/types/api.js";
+import { getRequiredEnv } from "./src/utils/env.js";
+import { errorResponse, jsonResponse } from "./src/utils/http.js";
 
 const client = new DynamoDBClient();
 
@@ -13,14 +16,11 @@ export const handler = async (
   const id = event.pathParameters?.id;
 
   if (!id) {
-    return {
-      statusCode: 400,
-      body: JSON.stringify({ error: "Item id is required" }),
-    };
+    return errorResponse(400, "Item id is required");
   }
 
   try {
-    const tableName: string | undefined = process.env.TABLE_NAME;
+    const tableName = getRequiredEnv("TABLE_NAME");
     const input: DeleteItemCommandInput = {
       TableName: tableName,
       Key: { id: { S: id } },
@@ -30,21 +30,15 @@ export const handler = async (
     const result = await client.send(new DeleteItemCommand(input));
 
     if (!result.Attributes) {
-      return {
-        statusCode: 404,
-        body: JSON.stringify({ error: "Item not found" }),
-      };
+      return errorResponse(404, "Item not found");
     }
 
-    return {
-      statusCode: 200,
-      body: JSON.stringify({ message: "Item deleted", id }),
-    };
+    return jsonResponse<DeleteItemResponse>(200, {
+      message: "Item deleted",
+      id,
+    });
   } catch (err) {
     console.error(err);
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ error: "Failed to delete item" }),
-    };
+    return errorResponse(500, "Failed to delete item");
   }
 };

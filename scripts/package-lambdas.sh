@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+script_path="${BASH_SOURCE[0]}"
+script_dir_path="${script_path%/*}"
+if [[ "$script_dir_path" == "$script_path" ]]; then
+  script_dir_path="."
+fi
+
+script_dir="$(cd -- "$script_dir_path" && pwd)"
 repo_root="$(cd -- "$script_dir/.." && pwd)"
 lambda_dir="$repo_root/lambdas"
 package_tmp_dir="$lambda_dir/.package-tmp"
+package_prod_dir="$lambda_dir/.package-prod"
 
 required_files=(
   "createItem.ts"
@@ -39,6 +46,11 @@ for file in "${required_files[@]}"; do
   fi
 done
 
+if [[ ! -d "src" ]]; then
+  echo "Error: Required directory is missing: src" >&2
+  exit 1
+fi
+
 if ! command -v npm >/dev/null 2>&1; then
   echo "Error: npm is required but was not found on PATH." >&2
   exit 1
@@ -68,33 +80,41 @@ for handler_package in "${handlers[@]}"; do
   fi
 done
 
-echo "Pruning development dependencies from Lambda package contents..."
-npm prune --omit=dev --no-package-lock
-
 echo "Removing old Lambda packages..."
 rm -f createItem.zip getItem.zip deleteItem.zip
 rm -rf "$package_tmp_dir"
+rm -rf "$package_prod_dir"
 mkdir -p "$package_tmp_dir"
+mkdir -p "$package_prod_dir"
 
 cleanup() {
   rm -rf "$package_tmp_dir"
+  rm -rf "$package_prod_dir"
 }
 trap cleanup EXIT
+
+echo "Installing production dependencies for Lambda packages..."
+cp package.json package-lock.json "$package_prod_dir/"
+(
+  cd "$package_prod_dir"
+  npm ci --omit=dev
+)
 
 for handler_package in "${handlers[@]}"; do
   handler="${handler_package%%:*}"
   package="${handler_package##*:}"
-  handler_file="$(basename "$handler")"
+  handler_file="${handler##*/}"
 
   echo "Creating package: $package"
   rm -rf "$package_tmp_dir"/*
   cp "$handler" "$package_tmp_dir/$handler_file"
+  cp -R dist/src "$package_tmp_dir/src"
   cp package.json package-lock.json "$package_tmp_dir/"
-  cp -R node_modules "$package_tmp_dir/"
+  cp -R "$package_prod_dir/node_modules" "$package_tmp_dir/"
 
   (
     cd "$package_tmp_dir"
-    zip -qr "$lambda_dir/$package" "$handler_file" package.json package-lock.json node_modules
+    zip -qr "$lambda_dir/$package" "$handler_file" src package.json package-lock.json node_modules
   )
 done
 

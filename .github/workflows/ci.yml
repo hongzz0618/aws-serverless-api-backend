@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  lambda-checks:
+    name: Lambda checks
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+          cache-dependency-path: lambdas/package-lock.json
+
+      - name: Install zip
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zip
+
+      - name: Install Lambda dependencies
+        working-directory: lambdas
+        run: npm ci
+
+      - name: Typecheck Lambda code
+        working-directory: lambdas
+        run: npm run typecheck
+
+      - name: Test Lambda code
+        working-directory: lambdas
+        run: npm test
+
+      - name: Build Lambda code
+        working-directory: lambdas
+        run: npm run build
+
+      - name: Audit production dependencies
+        working-directory: lambdas
+        run: npm audit --omit=dev
+
+      - name: Package Lambda functions
+        run: bash scripts/package-lambdas.sh
+
+      - name: Upload Lambda packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-packages
+          path: |
+            lambdas/createItem.zip
+            lambdas/getItem.zip
+            lambdas/deleteItem.zip
+          if-no-files-found: error
+
+  terraform-checks:
+    name: Terraform checks
+    runs-on: ubuntu-latest
+    needs: lambda-checks
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: terraform
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download Lambda packages
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-packages
+          path: lambdas
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check -recursive
+
+      - name: Initialize Terraform without backend
+        run: terraform init -backend=false
+
+      - name: Validate Terraform
+        run: terraform validate

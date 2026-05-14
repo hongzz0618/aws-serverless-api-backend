@@ -1,6 +1,8 @@
 import type { APIGatewayProxyEvent } from "aws-lambda";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const TEST_ITEM_ID = "00000000-0000-4000-8000-000000000001";
+
 const dynamoMock = vi.hoisted(() => ({
   send: vi.fn(),
   commands: [] as Array<{ name: string; input: unknown }>,
@@ -47,7 +49,7 @@ vi.mock("@aws-sdk/client-dynamodb", () => {
 });
 
 vi.mock("uuid", () => ({
-  v4: () => "test-item-id",
+  v4: () => "00000000-0000-4000-8000-000000000001",
 }));
 
 const apiEvent = (
@@ -125,7 +127,7 @@ describe("createItem handler", () => {
     expect(dynamoMock.send).not.toHaveBeenCalled();
   });
 
-  it("returns 400 when name is empty", async () => {
+  it("returns 400 when name contains only spaces", async () => {
     const { handler } = await import("../createItem.js");
 
     const result = await handler(apiEvent({ body: JSON.stringify({ name: "   " }) }));
@@ -135,7 +137,21 @@ describe("createItem handler", () => {
     expect(dynamoMock.send).not.toHaveBeenCalled();
   });
 
-  it("returns 201 when item is created successfully", async () => {
+  it("returns 400 when name is longer than the allowed max length", async () => {
+    const { handler } = await import("../createItem.js");
+
+    const result = await handler(
+      apiEvent({ body: JSON.stringify({ name: "a".repeat(101) }) })
+    );
+
+    expect(result.statusCode).toBe(400);
+    expect(responseBody(result.body)).toEqual({
+      error: "Name must be 100 characters or fewer",
+    });
+    expect(dynamoMock.send).not.toHaveBeenCalled();
+  });
+
+  it("returns 201 and trims the name when item is created successfully", async () => {
     dynamoMock.send.mockResolvedValueOnce({});
     const { handler } = await import("../createItem.js");
 
@@ -146,7 +162,7 @@ describe("createItem handler", () => {
     expect(result.statusCode).toBe(201);
     expect(responseBody(result.body)).toEqual({
       message: "Item created",
-      id: "test-item-id",
+      id: TEST_ITEM_ID,
     });
     expect(dynamoMock.send).toHaveBeenCalledTimes(1);
     expect(dynamoMock.commands[0]).toMatchObject({
@@ -154,7 +170,7 @@ describe("createItem handler", () => {
       input: {
         TableName: "items-table",
         Item: {
-          id: { S: "test-item-id" },
+          id: { S: TEST_ITEM_ID },
           name: { S: "Example item" },
         },
       },
@@ -183,11 +199,23 @@ describe("getItem handler", () => {
     expect(dynamoMock.send).not.toHaveBeenCalled();
   });
 
+  it("returns 400 when id is not a valid UUID", async () => {
+    const { handler } = await import("../getItem.js");
+
+    const result = await handler(apiEvent({ pathParameters: { id: "item-1" } }));
+
+    expect(result.statusCode).toBe(400);
+    expect(responseBody(result.body)).toEqual({
+      error: "Item id must be a valid UUID",
+    });
+    expect(dynamoMock.send).not.toHaveBeenCalled();
+  });
+
   it("returns 404 when item does not exist", async () => {
     dynamoMock.send.mockResolvedValueOnce({});
     const { handler } = await import("../getItem.js");
 
-    const result = await handler(apiEvent({ pathParameters: { id: "item-1" } }));
+    const result = await handler(apiEvent({ pathParameters: { id: TEST_ITEM_ID } }));
 
     expect(result.statusCode).toBe(404);
     expect(responseBody(result.body)).toEqual({ error: "Item not found" });
@@ -195,7 +223,7 @@ describe("getItem handler", () => {
       name: "GetItemCommand",
       input: {
         TableName: "items-table",
-        Key: { id: { S: "item-1" } },
+        Key: { id: { S: TEST_ITEM_ID } },
       },
     });
   });
@@ -203,18 +231,18 @@ describe("getItem handler", () => {
   it("returns 200 when item exists", async () => {
     dynamoMock.send.mockResolvedValueOnce({
       Item: {
-        id: { S: "item-1" },
+        id: { S: TEST_ITEM_ID },
         name: { S: "Example item" },
         createdAt: { S: "2026-05-14T10:00:00.000Z" },
       },
     });
     const { handler } = await import("../getItem.js");
 
-    const result = await handler(apiEvent({ pathParameters: { id: "item-1" } }));
+    const result = await handler(apiEvent({ pathParameters: { id: TEST_ITEM_ID } }));
 
     expect(result.statusCode).toBe(200);
     expect(responseBody(result.body)).toEqual({
-      id: "item-1",
+      id: TEST_ITEM_ID,
       name: "Example item",
       createdAt: "2026-05-14T10:00:00.000Z",
     });
@@ -224,7 +252,7 @@ describe("getItem handler", () => {
     dynamoMock.send.mockRejectedValueOnce(new Error("DynamoDB failure"));
     const { handler } = await import("../getItem.js");
 
-    const result = await handler(apiEvent({ pathParameters: { id: "item-1" } }));
+    const result = await handler(apiEvent({ pathParameters: { id: TEST_ITEM_ID } }));
 
     expect(result.statusCode).toBe(500);
     expect(responseBody(result.body)).toEqual({ error: "Failed to fetch item" });
@@ -242,11 +270,23 @@ describe("deleteItem handler", () => {
     expect(dynamoMock.send).not.toHaveBeenCalled();
   });
 
+  it("returns 400 when id is not a valid UUID", async () => {
+    const { handler } = await import("../deleteItem.js");
+
+    const result = await handler(apiEvent({ pathParameters: { id: "item-1" } }));
+
+    expect(result.statusCode).toBe(400);
+    expect(responseBody(result.body)).toEqual({
+      error: "Item id must be a valid UUID",
+    });
+    expect(dynamoMock.send).not.toHaveBeenCalled();
+  });
+
   it("returns 404 when item does not exist", async () => {
     dynamoMock.send.mockResolvedValueOnce({});
     const { handler } = await import("../deleteItem.js");
 
-    const result = await handler(apiEvent({ pathParameters: { id: "item-1" } }));
+    const result = await handler(apiEvent({ pathParameters: { id: TEST_ITEM_ID } }));
 
     expect(result.statusCode).toBe(404);
     expect(responseBody(result.body)).toEqual({ error: "Item not found" });
@@ -254,7 +294,7 @@ describe("deleteItem handler", () => {
       name: "DeleteItemCommand",
       input: {
         TableName: "items-table",
-        Key: { id: { S: "item-1" } },
+        Key: { id: { S: TEST_ITEM_ID } },
         ReturnValues: "ALL_OLD",
       },
     });
@@ -263,17 +303,17 @@ describe("deleteItem handler", () => {
   it("returns 200 when item is deleted", async () => {
     dynamoMock.send.mockResolvedValueOnce({
       Attributes: {
-        id: { S: "item-1" },
+        id: { S: TEST_ITEM_ID },
       },
     });
     const { handler } = await import("../deleteItem.js");
 
-    const result = await handler(apiEvent({ pathParameters: { id: "item-1" } }));
+    const result = await handler(apiEvent({ pathParameters: { id: TEST_ITEM_ID } }));
 
     expect(result.statusCode).toBe(200);
     expect(responseBody(result.body)).toEqual({
       message: "Item deleted",
-      id: "item-1",
+      id: TEST_ITEM_ID,
     });
   });
 
@@ -281,7 +321,7 @@ describe("deleteItem handler", () => {
     dynamoMock.send.mockRejectedValueOnce(new Error("DynamoDB failure"));
     const { handler } = await import("../deleteItem.js");
 
-    const result = await handler(apiEvent({ pathParameters: { id: "item-1" } }));
+    const result = await handler(apiEvent({ pathParameters: { id: TEST_ITEM_ID } }));
 
     expect(result.statusCode).toBe(500);
     expect(responseBody(result.body)).toEqual({ error: "Failed to delete item" });

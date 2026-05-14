@@ -9,45 +9,17 @@ import type { CreateItemResponse } from "./src/types/api.js";
 import type { StoredItem } from "./src/types/item.js";
 import { getRequiredEnv } from "./src/utils/env.js";
 import { errorResponse, jsonResponse } from "./src/utils/http.js";
-import { parseJson } from "./src/utils/json.js";
+import { validateCreateItemBody } from "./src/validation/item.js";
 
 const client = new DynamoDBClient();
-
-interface CreateItemRequestBody {
-  name: string;
-}
 
 export const handler = async (
   event: APIGatewayProxyEvent
 ): Promise<APIGatewayProxyResult> => {
-  if (!event.body) {
-    return errorResponse(400, "Request body is required");
-  }
+  const validation = validateCreateItemBody(event.body);
 
-  const parsedBody = parseJson(event.body);
-
-  if (!parsedBody.ok) {
-    return errorResponse(400, "Request body must be valid JSON");
-  }
-
-  if (
-    typeof parsedBody.value !== "object" ||
-    parsedBody.value === null ||
-    !("name" in parsedBody.value)
-  ) {
-    return errorResponse(400, "Name is required");
-  }
-
-  const body = parsedBody.value as Partial<CreateItemRequestBody>;
-
-  if (typeof body.name !== "string") {
-    return errorResponse(400, "Name must be a string");
-  }
-
-  const name = body.name.trim();
-
-  if (!name) {
-    return errorResponse(400, "Name cannot be empty");
+  if (!validation.ok) {
+    return errorResponse(400, validation.error);
   }
 
   try {
@@ -55,7 +27,7 @@ export const handler = async (
     const id = uuidv4();
     const item: StoredItem = {
       id: { S: id },
-      name: { S: name },
+      name: { S: validation.value.name },
       createdAt: { S: new Date().toISOString() },
     };
     const input: PutItemCommandInput = {

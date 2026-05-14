@@ -7,19 +7,21 @@ import {
 import type { Item, StoredItem } from "./src/types/item.js";
 import { getRequiredEnv } from "./src/utils/env.js";
 import { errorResponse, jsonResponse } from "./src/utils/http.js";
+import { validateItemId } from "./src/validation/item.js";
 
 const client = new DynamoDBClient();
 
 export const handler = async (
   event: APIGatewayProxyEvent
 ): Promise<APIGatewayProxyResult> => {
-  const id = event.pathParameters?.id;
+  const validation = validateItemId(event.pathParameters?.id);
 
-  if (!id) {
-    return errorResponse(400, "Item id is required");
+  if (!validation.ok) {
+    return errorResponse(400, validation.error);
   }
 
   try {
+    const id = validation.value;
     const tableName = getRequiredEnv("TABLE_NAME");
     const input: GetItemCommandInput = {
       TableName: tableName,

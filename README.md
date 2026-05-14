@@ -97,6 +97,8 @@ The routes below are defined in `terraform/main.tf`:
 
 The API is deployed to the `dev` stage.
 
+The Lambda handlers include basic input validation and return JSON error responses for invalid requests or missing items.
+
 ## Example Requests
 
 Replace `<API_URL>` with the Terraform output value, for example:
@@ -122,10 +124,26 @@ Example create response:
 }
 ```
 
+Example invalid create response:
+
+```json
+{
+  "error": "Name is required"
+}
+```
+
 Get an item:
 
 ```bash
 curl -X GET "<API_URL>/items/<ITEM_ID>"
+```
+
+Example missing item response:
+
+```json
+{
+  "error": "Item not found"
+}
 ```
 
 Delete an item:
@@ -205,7 +223,7 @@ Current security considerations:
 - The API is publicly reachable when deployed unless additional controls are added.
 - The Lambda execution role uses a least-privilege inline IAM policy scoped to the project DynamoDB table, allowing only `PutItem`, `GetItem`, and `DeleteItem`.
 - Secrets should not be hardcoded in Terraform, Lambda code, or committed configuration files.
-- Request validation and input validation should be added before exposing this pattern to real users.
+- Basic Lambda input validation is included, but stronger request validation should be added before exposing this pattern to real users.
 
 ## Observability
 
@@ -240,7 +258,7 @@ Current limitations:
 
 - No API authentication or authorization
 - No request schema validation
-- Minimal input validation in Lambda handlers
+- Basic input validation in Lambda handlers only
 - Basic error handling only
 - No automated tests
 - No CI/CD pipeline
@@ -255,7 +273,7 @@ Potential improvements:
 
 - Add API authentication or authorization
 - Add request validation at API Gateway or application level
-- Improve Lambda error handling and response consistency
+- Further improve Lambda error handling and response consistency
 - Add stronger input validation
 - Add SQS and a dead-letter queue for asynchronous processing patterns
 - Add CloudWatch alarms for operational signals
@@ -294,7 +312,7 @@ This project demonstrates a basic serverless CRUD API on AWS. API Gateway expose
 
 2-minute explanation:
 
-The API uses API Gateway as the public entry point and forwards requests to separate Node.js Lambda handlers. The create handler writes a new item to DynamoDB using a generated UUID, the get handler reads an item by ID, and the delete handler removes an item by ID. Terraform defines the DynamoDB table, Lambda functions, IAM role, API Gateway resources, methods, integrations, deployment stage, and output URL. DynamoDB access has been improved with a least-privilege IAM policy scoped to the project table, while authentication, validation, automated tests, and observability alarms remain future improvements before this pattern should be treated as production-ready.
+The API uses API Gateway as the public entry point and forwards requests to separate Node.js Lambda handlers. The create handler validates and writes a new item to DynamoDB using a generated UUID, the get handler reads an item by ID, and the delete handler removes an item by ID. Terraform defines the DynamoDB table, Lambda functions, IAM role, API Gateway resources, methods, integrations, deployment stage, and output URL. DynamoDB access has been improved with a least-privilege IAM policy scoped to the project table, while authentication, stronger validation, automated tests, and observability alarms remain future improvements before this pattern should be treated as production-ready.
 
 Likely follow-up questions:
 

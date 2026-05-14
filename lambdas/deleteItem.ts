@@ -7,23 +7,34 @@ import {
 
 const client = new DynamoDBClient();
 
-type PathParameters = {
-  id: string;
-};
-
 export const handler = async (
   event: APIGatewayProxyEvent
 ): Promise<APIGatewayProxyResult> => {
+  const id = event.pathParameters?.id;
+
+  if (!id) {
+    return {
+      statusCode: 400,
+      body: JSON.stringify({ error: "Item id is required" }),
+    };
+  }
+
   try {
     const tableName: string | undefined = process.env.TABLE_NAME;
-    const pathParameters = event.pathParameters as PathParameters;
-    const id = pathParameters.id;
     const input: DeleteItemCommandInput = {
       TableName: tableName,
       Key: { id: { S: id } },
+      ReturnValues: "ALL_OLD",
     };
 
-    await client.send(new DeleteItemCommand(input));
+    const result = await client.send(new DeleteItemCommand(input));
+
+    if (!result.Attributes) {
+      return {
+        statusCode: 404,
+        body: JSON.stringify({ error: "Item not found" }),
+      };
+    }
 
     return {
       statusCode: 200,

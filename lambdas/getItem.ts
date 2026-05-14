@@ -8,10 +8,6 @@ import {
 
 const client = new DynamoDBClient();
 
-type PathParameters = {
-  id: string;
-};
-
 type DynamoDBStringAttribute = AttributeValue.SMember;
 
 type StoredItem = Record<"id" | "name" | "createdAt", DynamoDBStringAttribute>;
@@ -19,10 +15,17 @@ type StoredItem = Record<"id" | "name" | "createdAt", DynamoDBStringAttribute>;
 export const handler = async (
   event: APIGatewayProxyEvent
 ): Promise<APIGatewayProxyResult> => {
+  const id = event.pathParameters?.id;
+
+  if (!id) {
+    return {
+      statusCode: 400,
+      body: JSON.stringify({ error: "Item id is required" }),
+    };
+  }
+
   try {
     const tableName: string | undefined = process.env.TABLE_NAME;
-    const pathParameters = event.pathParameters as PathParameters;
-    const id = pathParameters.id;
     const input: GetItemCommandInput = {
       TableName: tableName,
       Key: { id: { S: id } },

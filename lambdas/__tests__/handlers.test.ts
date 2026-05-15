@@ -1,4 +1,4 @@
-import type { APIGatewayProxyEvent } from "aws-lambda";
+import type { APIGatewayProxyEvent, Context } from "aws-lambda";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const TEST_ITEM_ID = "00000000-0000-4000-8000-000000000001";
@@ -72,11 +72,17 @@ const apiEvent = (
 
 const responseBody = <TBody>(body: string): TBody => JSON.parse(body) as TBody;
 
+const loggedJson = (): Array<Record<string, unknown>> =>
+  vi.mocked(console.log).mock.calls.map(
+    ([entry]) => JSON.parse(String(entry)) as Record<string, unknown>
+  );
+
 beforeEach(() => {
   vi.resetModules();
   dynamoMock.send.mockReset();
   dynamoMock.commands = [];
   process.env.TABLE_NAME = "items-table";
+  vi.spyOn(console, "log").mockImplementation(() => undefined);
   vi.spyOn(console, "error").mockImplementation(() => undefined);
 });
 
@@ -175,6 +181,35 @@ describe("createItem handler", () => {
         },
       },
     });
+  });
+
+  it("logs structured request metadata when context is available", async () => {
+    dynamoMock.send.mockResolvedValueOnce({});
+    const { handler } = await import("../createItem.js");
+
+    await handler(
+      apiEvent({ body: JSON.stringify({ name: "Example item" }) }),
+      { awsRequestId: "request-123" } as Context
+    );
+
+    expect(loggedJson()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: "info",
+          message: "Request received",
+          service: "items-api",
+          requestId: "request-123",
+          route: "POST /items",
+          operation: "createItem",
+        }),
+        expect.objectContaining({
+          level: "info",
+          message: "Item created",
+          itemId: TEST_ITEM_ID,
+          statusCode: 201,
+        }),
+      ])
+    );
   });
 
   it("returns 500 when DynamoDB fails", async () => {

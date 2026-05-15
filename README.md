@@ -1,40 +1,21 @@
 # AWS Serverless API Backend
 
-## Project Overview
+## Project Summary
 
-This repository contains a basic Terraform-provisioned serverless CRUD API backend on AWS. It demonstrates how API Gateway, AWS Lambda with Node.js, and Amazon DynamoDB can be combined to expose a lightweight REST-style API without managing servers.
+This repository implements a small AWS serverless backend for managing inventory or asset records. It exposes a REST-style API through API Gateway, runs TypeScript Lambda handlers, stores records in DynamoDB, and provisions the cloud infrastructure with Terraform.
 
-The project is intended as a cloud engineering portfolio project. It is not presented as a production-ready backend, but as a clear implementation of a common AWS serverless architecture pattern.
-
-## Repository Context
-
-This project is one of the linked projects in my AWS Architecture Portfolio. It focuses specifically on the serverless API backend pattern, separated from broader architecture examples so the infrastructure, Lambda handlers, diagram, and demo screenshots can be reviewed independently.
-
-Portfolio hub:
-
-[AWS Architecture Portfolio](https://github.com/hongzz0618/aws-architecture-portfolio)
-
-## Problem This Architecture Solves
-
-Many applications need a simple backend API for creating, reading, and deleting records without the operational overhead of managing virtual machines, containers, operating system patches, or database servers.
-
-This architecture solves that problem by using managed AWS services:
-
-- API Gateway receives HTTP requests.
-- Lambda runs backend logic only when requested.
-- DynamoDB stores item data using a serverless NoSQL model.
-- Terraform defines the infrastructure as code.
+The project is designed as a cloud/backend engineering portfolio project: realistic enough to discuss architecture, validation, IAM, observability, CI, and trade-offs, while still intentionally scoped as a learning and demonstration system rather than a production-ready service.
 
 ## Real-World Use Case
 
-This pattern is suitable for small APIs, prototypes, internal tools, mobile app backends, learning projects, and event-driven applications that need a simple persistence layer.
+The API can be viewed as the backend for a simple internal inventory or asset registry. A team could use this pattern to create, look up, and remove item records without operating servers, containers, or a relational database.
 
-Example use cases include:
+Example scenarios:
 
-- A lightweight item-tracking API
-- A backend for a mobile or web application
-- A prototype CRUD service
-- A small microservice with minimal infrastructure management
+- Tracking lightweight internal assets by ID
+- Supporting a small admin tool or internal dashboard
+- Prototyping a serverless item-management workflow
+- Demonstrating a DynamoDB key-value access pattern behind an HTTP API
 
 ## Architecture Diagram
 
@@ -42,69 +23,62 @@ Example use cases include:
 
 ## Architecture Overview
 
-The current implementation provisions:
-
-- A DynamoDB table with `id` as the partition key
-- Three Lambda functions written in TypeScript and compiled for Node.js Lambda
-- API Gateway REST API resources and methods
-- Lambda permissions allowing API Gateway to invoke the functions
-- A `dev` API Gateway stage
-- A Terraform output for the deployed API URL
-
-## AWS Services Used
-
-| Service | Purpose |
-| --- | --- |
-| Amazon API Gateway | Public HTTP entry point for API requests |
-| AWS Lambda | Runs the backend logic for create, get, and delete operations |
-| Amazon DynamoDB | Stores item records using a serverless NoSQL table |
-| AWS IAM | Provides the Lambda execution role and service permissions |
-| Amazon CloudWatch Logs | Receives Lambda logs through the basic Lambda execution role |
-| Terraform | Provisions and manages the AWS infrastructure |
-
-## Request Flow
-
-The implemented request flow is:
-
 ```text
-Client -> API Gateway -> Lambda -> DynamoDB -> Lambda -> API Gateway -> Client
+Client
+  -> API Gateway REST API
+  -> Lambda handler
+  -> DynamoDB table
+  -> Lambda handler
+  -> API Gateway response
+  -> Client
 ```
 
-1. A client sends an HTTP request to API Gateway.
-2. API Gateway routes the request to the matching Lambda function.
-3. The Lambda function reads from or writes to DynamoDB.
-4. DynamoDB returns the operation result to Lambda.
-5. Lambda returns an HTTP response payload.
-6. API Gateway sends the response back to the client.
-
-## Implemented Lambda Handlers
-
-| File | Responsibility |
+| Component | Role in this project |
 | --- | --- |
-| `lambdas/createItem.ts` | Creates a new item with a generated UUID, `name`, and `createdAt` timestamp |
-| `lambdas/getItem.ts` | Retrieves an item by `id` from DynamoDB |
-| `lambdas/deleteItem.ts` | Deletes an item by `id` from DynamoDB |
+| API Gateway | Public HTTP entry point for `POST /items`, `GET /items/{id}`, and `DELETE /items/{id}` |
+| AWS Lambda | Runs separate TypeScript handlers for create, read, and delete operations |
+| DynamoDB | Stores item records using `id` as the partition key |
+| IAM | Allows API Gateway to invoke Lambda and scopes Lambda data access to the project DynamoDB table |
+| CloudWatch Logs | Receives structured Lambda logs with 7-day log retention configured in Terraform |
+| Terraform | Defines the DynamoDB table, IAM role and policy, Lambda functions, API Gateway resources, deployment stage, and output URL |
+| GitHub Actions CI | Runs Lambda checks, packages deployment artifacts, and validates Terraform formatting/configuration |
 
-## API Routes
+## API Endpoints
 
-The routes below are defined in `terraform/main.tf`:
+The API is deployed to the `dev` API Gateway stage.
 
-| Method | Route | Lambda Handler | Description |
+| Method | Route | Purpose | Success response |
 | --- | --- | --- | --- |
-| `POST` | `/items` | `createItem.ts` | Creates a new item |
-| `GET` | `/items/{id}` | `getItem.ts` | Retrieves an item by ID |
-| `DELETE` | `/items/{id}` | `deleteItem.ts` | Deletes an item by ID |
+| `POST` | `/items` | Create an item with a generated UUID and timestamp | `201 Created` |
+| `GET` | `/items/{id}` | Fetch an item by UUID | `200 OK` |
+| `DELETE` | `/items/{id}` | Delete an item by UUID | `200 OK` |
 
-The API is deployed to the `dev` stage.
+### Validation Behavior
 
-The Lambda handlers include basic input validation and return JSON error responses for invalid requests or missing items.
+Request validation is implemented in the Lambda application layer with Zod.
+
+For `POST /items`:
+
+- Request body must be valid JSON.
+- `name` is required.
+- `name` must be a string.
+- `name` is trimmed before storage.
+- Empty or whitespace-only names are rejected.
+- `name` must be 100 characters or fewer.
+
+For `GET /items/{id}` and `DELETE /items/{id}`:
+
+- `id` is required.
+- `id` must be a valid UUID.
+
+Invalid requests return `400` JSON error responses. Missing items return `404`.
 
 ## Example Requests
 
-Replace `<API_URL>` with the Terraform output value, for example:
+Replace `<API_URL>` with the Terraform output value:
 
-```text
-https://example.execute-api.us-east-1.amazonaws.com/dev
+```bash
+terraform output api_url
 ```
 
 Create an item:
@@ -112,23 +86,15 @@ Create an item:
 ```bash
 curl -X POST "<API_URL>/items" \
   -H "Content-Type: application/json" \
-  -d '{"name":"Example item"}'
+  -d '{"name":"Laptop charger"}'
 ```
 
-Example create response:
+Example response:
 
 ```json
 {
   "message": "Item created",
-  "id": "generated-item-id"
-}
-```
-
-Example invalid create response:
-
-```json
-{
-  "error": "Name is required"
+  "id": "00000000-0000-4000-8000-000000000001"
 }
 ```
 
@@ -138,72 +104,152 @@ Get an item:
 curl -X GET "<API_URL>/items/<ITEM_ID>"
 ```
 
-Example missing item response:
-
-```json
-{
-  "error": "Item not found"
-}
-```
-
 Delete an item:
 
 ```bash
 curl -X DELETE "<API_URL>/items/<ITEM_ID>"
 ```
 
-## Terraform Structure
+## Engineering Quality Signals
 
-| File | Purpose |
-| --- | --- |
-| `terraform/main.tf` | Defines DynamoDB, IAM, Lambda functions, API Gateway routes, integrations, deployment, stage, and Lambda permissions |
-| `terraform/provider.tf` | Configures the AWS provider region from Terraform variables |
-| `terraform/variables.tf` | Declares `region` and `project_name` variables |
-| `terraform/outputs.tf` | Outputs the API Gateway URL as `api_url` |
-| `terraform/terraform.tfvars` | Provides default values for `project_name` and `region` |
-| `terraform/versions.tf` | Defines Terraform and AWS provider version constraints |
+This project includes several backend engineering practices beyond the minimum required to make a tutorial API work:
 
-## Deployment Guide
+- TypeScript strict mode for Lambda handlers and shared utilities
+- Shared utility modules for HTTP responses, environment variable handling, JSON parsing, logging, and validation
+- Zod request validation for request bodies and path parameters
+- Unit tests with Vitest for success paths, validation failures, not-found responses, and DynamoDB error handling
+- GitHub Actions CI for install, typecheck, tests, build, production dependency audit, Lambda packaging, Terraform formatting, and Terraform validation
+- `npm audit --omit=dev` included in CI for production dependency vulnerability checks
+- Structured JSON logging from Lambda handlers
+- Terraform-managed AWS infrastructure instead of manual console setup
+- Lambda deployment packages generated by `scripts/package-lambdas.sh`
+
+## Security Considerations
+
+This project intentionally keeps API security simple so the core serverless architecture is easy to inspect.
+
+Current state:
+
+- API Gateway methods currently use `authorization = "NONE"`.
+- The deployed API is publicly reachable unless additional controls are added.
+- Lambda permissions allow API Gateway to invoke the functions.
+- Lambda DynamoDB permissions are scoped to the project table and limited to `PutItem`, `GetItem`, and `DeleteItem`.
+- No secrets should be committed to the repository, Terraform files, Lambda source, or local configuration.
+
+Before treating this as a production pattern, the API should add an authentication and authorization layer such as Amazon Cognito, a JWT authorizer, IAM authorization, or another identity-aware gateway pattern. Public APIs should also add API Gateway throttling, rate limiting, and abuse protection appropriate to the use case.
+
+## Observability
+
+The Lambda handlers emit structured JSON logs to CloudWatch Logs. These logs are designed to be readable by humans and queryable by log tooling.
+
+Logged fields include:
+
+- Timestamp
+- Log level
+- Service name
+- AWS request ID when Lambda context is available
+- Route
+- Operation name
+- HTTP status code for completed outcomes
+- Safe item ID values for item-level operations
+- Error name and error message for unexpected failures
+
+The handlers do not log full request bodies. That keeps potentially sensitive user-submitted data, such as item names, out of application logs.
+
+Current observability gaps:
+
+- No CloudWatch alarms yet
+- No API Gateway access logs yet
+- No distributed tracing yet
+- No dashboard yet
+
+## Cost Awareness
+
+The architecture uses a low-operational-overhead serverless model:
+
+- API Gateway charges mainly by request volume.
+- Lambda charges by invocation count and duration.
+- DynamoDB is configured with on-demand billing.
+- CloudWatch Logs can still create cost through ingestion and retention.
+
+Terraform configures Lambda log groups with 7-day retention to reduce long-lived log storage cost. After demos or testing, run `terraform destroy` to avoid leaving AWS resources active.
+
+## Deployment
 
 Prerequisites:
 
 - AWS account and credentials configured locally
 - Terraform `>= 1.5.0`
-- Node.js/npm for installing Lambda dependencies
+- Node.js and npm
+- Bash-compatible shell
+- `zip` available on `PATH`
 
-Package the Lambda functions from the repository root:
+Install and validate Lambda code:
+
+```bash
+cd lambdas
+npm ci
+npm run typecheck
+npm test
+npm run build
+npm audit --omit=dev
+cd ..
+```
+
+Package Lambda functions from the repository root:
 
 ```bash
 bash scripts/package-lambdas.sh
 ```
 
-The packaging script installs dependencies, compiles the TypeScript handlers into `lambdas/dist/`, removes old Lambda zip files, and creates the zip files required by Terraform. Each zip contains the compiled handler JavaScript at the zip root so the Terraform Lambda handler names remain unchanged.
-Windows users should run this script from WSL or Git Bash with `zip` available on `PATH`.
-
-The Terraform configuration expects these zip files to exist in the `lambdas` directory:
+The packaging script installs dependencies, compiles the TypeScript handlers, installs production dependencies for the packages, and creates the Lambda zip files expected by Terraform:
 
 - `lambdas/createItem.zip`
 - `lambdas/getItem.zip`
 - `lambdas/deleteItem.zip`
 
-Run the packaging script before `terraform plan` or `terraform apply`.
-
-Deploy the infrastructure:
+Validate Terraform:
 
 ```bash
 cd terraform
+terraform fmt -check -recursive
 terraform init
-terraform plan
-terraform apply
+terraform validate
 ```
 
-After deployment, get the API URL:
+Deploy:
 
 ```bash
+terraform apply
 terraform output api_url
 ```
 
-Use that value as `<API_URL>` in the example requests.
+Use the `api_url` output as `<API_URL>` in the example requests.
+
+## CI Validation
+
+GitHub Actions runs two jobs:
+
+- Lambda checks: `npm ci`, `npm run typecheck`, `npm test`, `npm run build`, `npm audit --omit=dev`, and Lambda packaging
+- Terraform checks: artifact download, `terraform fmt -check -recursive`, `terraform init -backend=false`, and `terraform validate`
+
+The CI workflow validates the application and infrastructure definitions, but it does not currently deploy to AWS.
+
+## Repository Structure
+
+| Path | Purpose |
+| --- | --- |
+| `lambdas/createItem.ts` | Lambda handler for `POST /items` |
+| `lambdas/getItem.ts` | Lambda handler for `GET /items/{id}` |
+| `lambdas/deleteItem.ts` | Lambda handler for `DELETE /items/{id}` |
+| `lambdas/src/utils/` | Shared Lambda utilities |
+| `lambdas/src/validation/` | Zod request validation |
+| `lambdas/__tests__/` | Vitest unit tests |
+| `scripts/package-lambdas.sh` | Build and packaging script for Lambda zip artifacts |
+| `terraform/` | Terraform configuration for AWS resources |
+| `.github/workflows/ci.yml` | GitHub Actions CI workflow |
+| `diagram/` | Architecture diagram source and rendered image |
+| `images/` | Demo screenshots |
 
 ## Demo Screenshots
 
@@ -213,129 +259,86 @@ These screenshots show the deployed API being exercised and the backend resource
 ![Demo Screenshot 2](images/demo2.png)
 ![Demo Screenshot 3](images/demo3.png)
 
-## Security Considerations
-
-This project is intentionally simple and should be reviewed before being used beyond a demo environment.
-
-Current security considerations:
-
-- API Gateway methods currently use `authorization = "NONE"`.
-- The API is publicly reachable when deployed unless additional controls are added.
-- The Lambda execution role uses a least-privilege inline IAM policy scoped to the project DynamoDB table, allowing only `PutItem`, `GetItem`, and `DeleteItem`.
-- Secrets should not be hardcoded in Terraform, Lambda code, or committed configuration files.
-- Basic Lambda input validation is included, but stronger request validation should be added before exposing this pattern to real users.
-
-## Observability
-
-The Lambda execution role includes the AWS managed basic Lambda execution policy, which allows Lambda logs to be written to CloudWatch Logs. Lambda CloudWatch log groups are managed by Terraform with 7-day retention for cost control.
-
-Useful observability areas for this architecture include:
-
-- Lambda logs in CloudWatch Logs
-- Lambda invocation count, errors, duration, and throttles
-- API Gateway request count, latency, and error metrics
-- DynamoDB read/write usage and throttling metrics
-- Future CloudWatch alarms for API errors, Lambda errors, and throttles
-- Possible AWS X-Ray tracing for request-level debugging
-
-## Cost Considerations
-
-This architecture uses managed, usage-based services, but deployed resources can still generate cost.
-
-Cost drivers include:
-
-- API Gateway request volume
-- Lambda request count and execution duration
-- DynamoDB read/write usage with on-demand billing
-- CloudWatch log ingestion and 7-day retention
-- Any additional observability or tracing added later
-
-After testing, run `terraform destroy` to remove the deployed resources.
-
 ## Limitations
 
-Current limitations:
+This project is not production-ready yet. The main limitations are:
 
-- No API authentication or authorization
-- No request schema validation
-- Basic input validation in Lambda handlers only
-- Basic error handling only
-- No automated tests
-- No CI/CD pipeline
-- No Terraform remote state configuration
-- No environment separation such as `dev`, `staging`, and `prod`
-- Lambda packaging is automated with a Bash script, but it is not yet integrated into CI/CD.
-- IAM access to DynamoDB has been scoped to the project table, but broader API security controls such as authentication and request validation are still not implemented.
+- No authentication or authorization yet
+- No API Gateway throttling or rate limiting yet
+- No API Gateway access logs yet
+- No CloudWatch alarms yet
+- No separate `dev`, `staging`, and `prod` environments
+- No Terraform remote state backend
+- No automated smoke tests against a deployed API
+- No CI/CD deployment pipeline
+- Single-table DynamoDB design is intentionally simple and only supports lookup by `id`
 
-## Future Improvements
+## Architecture Trade-Offs
 
-Potential improvements:
+Why serverless for this project:
 
-- Add API authentication or authorization
-- Add request validation at API Gateway or application level
-- Further improve Lambda error handling and response consistency
-- Add stronger input validation
-- Add SQS and a dead-letter queue for asynchronous processing patterns
-- Add CloudWatch alarms for operational signals
-- Further refine IAM and API Gateway security controls as the project evolves
-- Add a CI/CD pipeline
-- Configure Terraform remote state
-- Add environment separation
-- Add automated tests for Lambda handlers
-- Integrate Lambda packaging into CI/CD.
+- Lower operational overhead than managing EC2 instances or containers
+- Natural fit for low-to-moderate traffic APIs and internal tools
+- Usage-based cost model for small workloads
+- Clear separation between HTTP routing, compute, and persistence
 
-## Architecture Trade-offs
+Trade-offs:
 
-Compared with an ECS/Fargate backend:
-
-- This serverless approach has less infrastructure to manage.
-- It can be simpler for small APIs and event-driven workloads.
-- ECS/Fargate may be better for long-running services, custom runtimes, or containerized workloads with more control.
-
-Compared with an EC2-based backend:
-
-- This approach avoids server provisioning, patching, and capacity planning.
-- EC2 provides more operating system and networking control.
-- EC2 may be more appropriate for legacy applications or workloads requiring persistent compute.
-
-Compared with an RDS-based backend:
-
-- DynamoDB is serverless and scales differently from relational databases.
-- DynamoDB works well for key-value access patterns like this project's `id` lookup.
-- RDS is better when the application needs relational queries, joins, transactions, or SQL-based reporting.
+- Cold starts and Lambda limits need to be considered for latency-sensitive workloads.
+- API Gateway and Lambda behavior can be less transparent than a traditional long-running service.
+- DynamoDB requires access-pattern-first data modeling and is not a drop-in replacement for relational querying.
+- Production systems need additional work around auth, throttling, monitoring, deployment safety, and environment separation.
 
 ## Interview Talking Points
 
-30-second explanation:
+This project demonstrates:
 
-This project demonstrates a basic serverless CRUD API on AWS. API Gateway exposes HTTP routes, Lambda functions handle create, read, and delete operations, DynamoDB stores the data, and Terraform provisions the infrastructure.
+- Serverless API design using API Gateway, Lambda, and DynamoDB
+- Terraform infrastructure as code for a small but complete AWS backend
+- DynamoDB key-value access using `id` as the primary lookup pattern
+- Input validation with Zod before calling DynamoDB
+- CI quality gates for TypeScript, tests, builds, dependency audit, packaging, and Terraform validation
+- Structured JSON logging for operational debugging
+- Least-privilege thinking for Lambda access to DynamoDB
+- Clear production trade-offs rather than overstating readiness
 
-2-minute explanation:
+Good discussion prompts:
 
-The API uses API Gateway as the public entry point and forwards requests to separate Node.js Lambda handlers. The create handler validates and writes a new item to DynamoDB using a generated UUID, the get handler reads an item by ID, and the delete handler removes an item by ID. Terraform defines the DynamoDB table, Lambda functions, IAM role, API Gateway resources, methods, integrations, deployment stage, and output URL. DynamoDB access has been improved with a least-privilege IAM policy scoped to the project table, while authentication, stronger validation, automated tests, and observability alarms remain future improvements before this pattern should be treated as production-ready.
+- How would authentication be added with Cognito or JWT authorizers?
+- Where should throttling, access logs, and alarms be configured?
+- When would DynamoDB be a good fit, and when would RDS be better?
+- How would the Terraform be split for multiple environments?
+- What smoke tests would be valuable after deployment?
+- How would CI evolve into safe deployment automation?
 
-Likely follow-up questions:
+## Future Improvements
 
-- Why use API Gateway and Lambda instead of ECS or EC2?
-- How would you secure this API?
-- How would you apply least privilege to the Lambda role?
-- How would you add validation for incoming requests?
-- How would you monitor errors, latency, and throttling?
-- How would you separate dev, staging, and production environments?
-- How would you automate packaging and deployment?
-- When would DynamoDB be a better fit than RDS, and when would it not?
+Priority improvements:
 
-## CV Bullet Draft
+- Add Cognito, JWT authorizer, IAM auth, or another authorization layer
+- Configure API Gateway throttling and access logs
+- Add CloudWatch alarms for Lambda errors, API Gateway 4xx/5xx rates, latency, and DynamoDB throttling
+- Introduce environment separation for `dev`, `staging`, and `prod`
+- Add Terraform remote state and locking
+- Add architecture decision records for key trade-offs
+- Add smoke tests that run against a deployed API URL
+- Add a controlled deployment workflow after validation passes
 
-- Built a Terraform-provisioned AWS serverless API backend using API Gateway, Node.js Lambda functions, and DynamoDB, including least-privilege DynamoDB IAM, automated Lambda packaging, documented CRUD routes, and security/observability considerations for a cloud engineering portfolio.
+## Cleanup
 
-## Cleanup / Destroy Instructions
-
-To remove the deployed AWS resources:
+To remove deployed AWS resources:
 
 ```bash
 cd terraform
 terraform destroy
 ```
 
-Review the destroy plan before confirming. This helps avoid leaving API Gateway, Lambda, DynamoDB, IAM, and CloudWatch-related resources running after testing. After cleanup, check for any retained resources or CloudWatch log groups.
+Review the destroy plan before confirming. After cleanup, check for any retained resources or CloudWatch log groups that may need manual review.
+
+## Portfolio Context
+
+This repository is part of an AWS architecture portfolio and focuses specifically on the serverless API backend pattern.
+
+Portfolio hub:
+
+[AWS Architecture Portfolio](https://github.com/hongzz0618/aws-architecture-portfolio)

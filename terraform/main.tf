@@ -57,7 +57,7 @@ resource "aws_lambda_function" "create_item" {
   function_name = "${var.project_name}-create"
   role          = aws_iam_role.lambda_exec.arn
   handler       = "createItem.handler"
-  runtime       = "nodejs18.x"
+  runtime       = "nodejs22.x"
 
   filename         = "${path.module}/../lambdas/createItem.zip"
   source_code_hash = filebase64sha256("${path.module}/../lambdas/createItem.zip")
@@ -80,7 +80,7 @@ resource "aws_lambda_function" "get_item" {
   function_name = "${var.project_name}-get"
   role          = aws_iam_role.lambda_exec.arn
   handler       = "getItem.handler"
-  runtime       = "nodejs18.x"
+  runtime       = "nodejs22.x"
 
   filename         = "${path.module}/../lambdas/getItem.zip"
   source_code_hash = filebase64sha256("${path.module}/../lambdas/getItem.zip")
@@ -103,7 +103,7 @@ resource "aws_lambda_function" "delete_item" {
   function_name = "${var.project_name}-delete"
   role          = aws_iam_role.lambda_exec.arn
   handler       = "deleteItem.handler"
-  runtime       = "nodejs18.x"
+  runtime       = "nodejs22.x"
 
   filename         = "${path.module}/../lambdas/deleteItem.zip"
   source_code_hash = filebase64sha256("${path.module}/../lambdas/deleteItem.zip")

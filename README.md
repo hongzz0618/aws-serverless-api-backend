@@ -302,6 +302,14 @@ Trade-offs:
 - DynamoDB requires access-pattern-first data modeling and is not a drop-in replacement for relational querying.
 - Production systems need additional work around auth, throttling, monitoring, deployment safety, and environment separation.
 
+## Architecture Decisions
+
+Lightweight ADRs capture the main design choices and trade-offs behind this project:
+
+- [001. Use API Gateway, Lambda, and DynamoDB for the CRUD API](docs/adr/001-use-serverless-api-gateway-lambda-dynamodb.md)
+- [002. Use DynamoDB for Item Storage](docs/adr/002-use-dynamodb-for-item-storage.md)
+- [003. Add Validation, Structured Logs, and Basic Operability Controls](docs/adr/003-operability-validation-and-observability.md)
+
 ## Interview Talking Points
 
 This project demonstrates:
@@ -333,7 +341,7 @@ Priority improvements:
 - Add CloudWatch dashboards and additional alarms for API Gateway 4XX rates, latency, and DynamoDB throttling
 - Introduce environment separation for `dev`, `staging`, and `prod`
 - Add Terraform remote state and locking
-- Add architecture decision records for key trade-offs
+- Expand ADR coverage for future design changes
 - Add smoke tests that run against a deployed API URL
 - Add a controlled deployment workflow after validation passes
 

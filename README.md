@@ -306,7 +306,7 @@ Trade-offs:
 
 Lightweight ADRs capture the main design choices and trade-offs behind this project:
 
-- [001. Use API Gateway, Lambda, and DynamoDB for the CRUD API](docs/adr/001-use-serverless-api-gateway-lambda-dynamodb.md)
+- [001. Use API Gateway, Lambda, and DynamoDB for the serverless item API](docs/adr/001-use-serverless-api-gateway-lambda-dynamodb.md)
 - [002. Use DynamoDB for Item Storage](docs/adr/002-use-dynamodb-for-item-storage.md)
 - [003. Add Validation, Structured Logs, and Basic Operability Controls](docs/adr/003-operability-validation-and-observability.md)
 

@@ -1,4 +1,4 @@
-# 001. Use API Gateway, Lambda, and DynamoDB for the CRUD API
+# 001. Use API Gateway, Lambda, and DynamoDB for the serverless item API
 
 ## Status
 
@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-This project needs a small HTTP backend for creating, reading, and deleting item records. The main goals are to demonstrate a realistic AWS serverless API shape, keep operations lightweight, and avoid managing servers or containers for a portfolio-sized CRUD workload.
+This project needs a small HTTP backend for creating, reading, and deleting item records. The main goals are to demonstrate a realistic AWS serverless API shape, keep operations lightweight, and avoid managing servers or containers for a portfolio-sized item management workload.
 
 ## Decision
 

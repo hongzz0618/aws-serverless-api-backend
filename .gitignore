@@ -11,7 +11,6 @@ override.tf.json
 
 # Terraform directories
 .terraform/
-.terraform.lock.hcl
 
 # Sensitive files
 *.pem

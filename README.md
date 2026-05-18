@@ -4,7 +4,7 @@
 
 This repository implements a small AWS serverless backend for managing inventory or asset records. It exposes a REST-style API through API Gateway, runs TypeScript Lambda handlers, stores records in DynamoDB, and provisions the cloud infrastructure with Terraform.
 
-The project is designed as a cloud/backend engineering portfolio project: realistic enough to discuss architecture, validation, IAM, observability, CI, and trade-offs, while still intentionally scoped as a learning and demonstration system rather than a production-ready service.
+The project is designed as a cloud/backend engineering reference project: realistic enough to discuss architecture, validation, IAM, observability, CI, and trade-offs, while still intentionally scoped as a learning and reference system rather than a production-ready service.
 
 ## Real-World Use Case
 
@@ -310,7 +310,7 @@ Lightweight ADRs capture the main design choices and trade-offs behind this proj
 - [002. Use DynamoDB for Item Storage](docs/adr/002-use-dynamodb-for-item-storage.md)
 - [003. Add Validation, Structured Logs, and Basic Operability Controls](docs/adr/003-operability-validation-and-observability.md)
 
-## Interview Talking Points
+## Architecture Discussion Notes
 
 This project demonstrates:
 
@@ -356,10 +356,10 @@ terraform destroy
 
 Review the destroy plan before confirming. After cleanup, check for any retained resources or CloudWatch log groups that may need manual review.
 
-## Portfolio Context
+## Related Reference Hub
 
-This repository is part of an AWS architecture portfolio and focuses specifically on the serverless API backend pattern.
+This repository is part of a broader AWS architecture reference hub and focuses specifically on the serverless API backend pattern.
 
-Portfolio hub:
+Reference hub:
 
-[AWS Architecture Portfolio](https://github.com/hongzz0618/aws-architecture-portfolio)
+[AWS Architecture Labs](https://github.com/hongzz0618/aws-architecture-labs)

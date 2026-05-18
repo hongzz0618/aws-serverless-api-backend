@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-This project needs a small HTTP backend for creating, reading, and deleting item records. The main goals are to demonstrate a realistic AWS serverless API shape, keep operations lightweight, and avoid managing servers or containers for a portfolio-sized item management workload.
+This project needs a small HTTP backend for creating, reading, and deleting item records. The main goals are to demonstrate a realistic AWS serverless API shape, keep operations lightweight, and avoid managing servers or containers for a small reference item-management workload.
 
 ## Decision
 

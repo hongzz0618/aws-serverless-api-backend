@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-The API is public and request-driven. Even in a portfolio project, it should show how backend behavior is validated, logged, and monitored without pretending to be production-complete.
+The API is public and request-driven. Even in a reference project, it should show how backend behavior is validated, logged, and monitored without pretending to be production-complete.
 
 ## Decision
 

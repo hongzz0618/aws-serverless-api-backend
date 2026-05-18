@@ -221,10 +221,17 @@ The packaging script installs dependencies, compiles the TypeScript handlers, in
 - `lambdas/getItem.zip`
 - `lambdas/deleteItem.zip`
 
-Validate Terraform:
+Configure local Terraform variables:
 
 ```bash
 cd terraform
+cp terraform.tfvars.example terraform.tfvars
+# Then edit terraform.tfvars with local values.
+```
+
+Validate Terraform:
+
+```bash
 terraform fmt -check -recursive
 terraform init -backend=false
 terraform validate

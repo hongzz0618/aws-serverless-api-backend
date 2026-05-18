@@ -1,0 +1,6 @@
+# Copy this file before deployment:
+# cp terraform.tfvars.example terraform.tfvars
+# Then edit terraform.tfvars with local values.
+
+project_name = "serverless-api"
+region       = "us-east-1"

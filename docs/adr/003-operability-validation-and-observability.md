@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-The API is public and request-driven. Even in a reference project, it should show how backend behavior is validated, logged, and monitored without pretending to be production-complete.
+The API is public and request-driven. Even in a reference project, it should show how backend behavior is validated, logged, and monitored without pretending to be a complete service baseline.
 
 ## Decision
 
@@ -34,4 +34,4 @@ Benefits:
 
 ## Consequences
 
-The project now demonstrates more mature operational thinking while staying small. Important gaps remain: authentication and authorization, WAF or stronger public abuse controls, multi-environment strategy, deployment smoke tests, dashboards, and deeper production readiness work.
+The project now demonstrates additional operational controls while staying small. Important gaps remain: authentication and authorization, WAF or stronger public abuse controls, multi-environment strategy, deployment smoke tests, dashboards, and deeper operational readiness work.

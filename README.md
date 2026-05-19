@@ -4,7 +4,7 @@
 
 This repository implements a small AWS serverless backend for managing inventory or asset records. It exposes a REST-style API through API Gateway, runs TypeScript Lambda handlers, stores records in DynamoDB, and provisions the cloud infrastructure with Terraform.
 
-The project is designed as a cloud/backend engineering reference project: realistic enough to discuss architecture, validation, IAM, observability, CI, and trade-offs, while still intentionally scoped as a learning and reference system rather than a production-ready service.
+The project is designed as a cloud/backend engineering reference implementation: realistic enough to discuss architecture, validation, IAM, observability, CI, and trade-offs, while still intentionally scoped as a learning-oriented architecture lab rather than a complete service baseline.
 
 ## Real-World Use Case
 
@@ -136,11 +136,11 @@ Current state:
 - API Gateway methods currently use `authorization = "NONE"`.
 - The deployed API is publicly reachable unless additional controls are added.
 - API Gateway throttling is configured to reduce accidental abuse and cost risk, but it is not a substitute for authentication or WAF protections.
-- Lambda permissions allow API Gateway to invoke the functions.
+- Lambda invoke permissions are scoped to the API Gateway routes that call each function.
 - Lambda DynamoDB permissions are scoped to the project table and limited to `PutItem`, `GetItem`, and `DeleteItem`.
 - No secrets should be committed to the repository, Terraform files, Lambda source, or local configuration.
 
-Before treating this as a production pattern, the API should add an authentication and authorization layer such as Amazon Cognito, a JWT authorizer, IAM authorization, or another identity-aware gateway pattern. Public APIs should also add abuse protection appropriate to the use case.
+Before broader use, the API should add an authentication and authorization layer such as Amazon Cognito, a JWT authorizer, IAM authorization, or another identity-aware gateway pattern. Public APIs should also add abuse protection appropriate to the use case.
 
 ## Observability
 
@@ -281,7 +281,7 @@ These screenshots show the deployed API being exercised and the backend resource
 
 ## Limitations
 
-This project is not production-ready yet. The main limitations are:
+This project is intentionally limited. The main limitations are:
 
 - No authentication or authorization yet
 - Basic API Gateway throttling is configured, but there is no per-client usage plan or API key strategy
@@ -307,7 +307,7 @@ Trade-offs:
 - Cold starts and Lambda limits need to be considered for latency-sensitive workloads.
 - API Gateway and Lambda behavior can be less transparent than a traditional long-running service.
 - DynamoDB requires access-pattern-first data modeling and is not a drop-in replacement for relational querying.
-- Production systems need additional work around auth, throttling, monitoring, deployment safety, and environment separation.
+- Broader use would need additional work around auth, throttling, monitoring, deployment safety, and environment separation.
 
 ## Architecture Decisions
 
@@ -322,13 +322,13 @@ Lightweight ADRs capture the main design choices and trade-offs behind this proj
 This project demonstrates:
 
 - Serverless API design using API Gateway, Lambda, and DynamoDB
-- Terraform infrastructure as code for a small but complete AWS backend
+- Terraform infrastructure as code for a focused AWS backend reference
 - DynamoDB key-value access using `id` as the primary lookup pattern
 - Input validation with Zod before calling DynamoDB
 - CI quality gates for TypeScript, tests, builds, dependency audit, packaging, and Terraform validation
 - Structured JSON logging for operational debugging
 - Least-privilege thinking for Lambda access to DynamoDB
-- Clear production trade-offs rather than overstating readiness
+- Clear operational trade-offs rather than overstating readiness
 
 Good discussion prompts:
 

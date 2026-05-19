@@ -28,8 +28,8 @@ Benefits:
 - Lambda cold starts can affect tail latency.
 - The design is tied to AWS-managed services and APIs.
 - Lambda timeout and payload limits matter for larger workloads.
-- A public API still needs authentication, authorization, throttling, and abuse controls before it can be treated as production-ready.
+- A public API still needs authentication, authorization, throttling, and abuse controls before broader use.
 
 ## Consequences
 
-This is a good fit for a focused serverless backend demonstration, but it is intentionally not a full production platform. Future production work should prioritize authentication, environment separation, deployment safety, and stronger abuse protection.
+This is a good fit for a focused serverless backend demonstration, but it is intentionally not a complete service baseline. Further work should prioritize authentication, environment separation, deployment safety, and stronger abuse protection.

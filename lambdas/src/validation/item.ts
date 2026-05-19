@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { Item } from "../types/item.js";
 import { parseJson } from "../utils/json.js";
 
 export const ITEM_NAME_MAX_LENGTH = 100;
@@ -29,6 +30,16 @@ const createItemBodySchema = z.object({
 
 const itemIdSchema = z.uuid({
   error: "Item id must be a valid UUID",
+});
+
+const dynamoDbStringAttributeSchema = z.object({
+  S: z.string(),
+});
+
+const storedItemSchema = z.object({
+  id: dynamoDbStringAttributeSchema,
+  name: dynamoDbStringAttributeSchema,
+  createdAt: dynamoDbStringAttributeSchema,
 });
 
 const isJsonObject = (value: unknown): value is Record<string, unknown> =>
@@ -97,5 +108,25 @@ export const validateItemId = (
   return {
     ok: true,
     value: result.data,
+  };
+};
+
+export const parseStoredItem = (item: unknown): ValidationResult<Item> => {
+  const result = storedItemSchema.safeParse(item);
+
+  if (!result.success) {
+    return {
+      ok: false,
+      error: "Stored item has an invalid shape",
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      id: result.data.id.S,
+      name: result.data.name.S,
+      createdAt: result.data.createdAt.S,
+    },
   };
 };

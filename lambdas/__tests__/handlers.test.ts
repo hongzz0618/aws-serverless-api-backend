@@ -77,6 +77,11 @@ const loggedJson = (): Array<Record<string, unknown>> =>
     ([entry]) => JSON.parse(String(entry)) as Record<string, unknown>
   );
 
+const errorLoggedJson = (): Array<Record<string, unknown>> =>
+  vi.mocked(console.error).mock.calls.map(
+    ([entry]) => JSON.parse(String(entry)) as Record<string, unknown>
+  );
+
 beforeEach(() => {
   vi.resetModules();
   dynamoMock.send.mockReset();
@@ -281,6 +286,53 @@ describe("getItem handler", () => {
       name: "Example item",
       createdAt: "2026-05-14T10:00:00.000Z",
     });
+  });
+
+  it("returns 500 when the stored item shape is invalid", async () => {
+    dynamoMock.send.mockResolvedValueOnce({
+      Item: {
+        id: { S: TEST_ITEM_ID },
+        name: { S: "Example item" },
+      },
+    });
+    const { handler } = await import("../getItem.js");
+
+    const result = await handler(apiEvent({ pathParameters: { id: TEST_ITEM_ID } }));
+
+    expect(result.statusCode).toBe(500);
+    expect(responseBody(result.body)).toEqual({ error: "Failed to fetch item" });
+  });
+
+  it("logs metadata when the stored item shape is invalid", async () => {
+    dynamoMock.send.mockResolvedValueOnce({
+      Item: {
+        id: { S: TEST_ITEM_ID },
+        createdAt: { S: "2026-05-14T10:00:00.000Z" },
+      },
+    });
+    const { handler } = await import("../getItem.js");
+
+    await handler(
+      apiEvent({ pathParameters: { id: TEST_ITEM_ID } }),
+      { awsRequestId: "request-456" } as Context
+    );
+
+    expect(errorLoggedJson()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: "error",
+          message: "Stored item shape invalid",
+          service: "items-api",
+          requestId: "request-456",
+          route: "GET /items/{id}",
+          operation: "getItem",
+          statusCode: 500,
+          itemId: TEST_ITEM_ID,
+          errorName: "Error",
+          errorMessage: "Stored item has an invalid shape",
+        }),
+      ])
+    );
   });
 
   it("returns 500 when DynamoDB fails", async () => {

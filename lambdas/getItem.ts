@@ -8,11 +8,11 @@ import {
   GetItemCommand,
   type GetItemCommandInput,
 } from "@aws-sdk/client-dynamodb";
-import type { Item, StoredItem } from "./src/types/item.js";
+import type { Item } from "./src/types/item.js";
 import { getRequiredEnv } from "./src/utils/env.js";
 import { errorResponse, jsonResponse } from "./src/utils/http.js";
 import { createLogger } from "./src/utils/logger.js";
-import { validateItemId } from "./src/validation/item.js";
+import { parseStoredItem, validateItemId } from "./src/validation/item.js";
 
 const client = new DynamoDBClient();
 const route = "GET /items/{id}";
@@ -59,19 +59,22 @@ export const handler = async (
       return errorResponse(404, "Item not found");
     }
 
-    const item = result.Item as StoredItem;
-    const response: Item = {
-      id: item.id.S,
-      name: item.name.S,
-      createdAt: item.createdAt.S,
-    };
+    const parsedItem = parseStoredItem(result.Item);
+
+    if (!parsedItem.ok) {
+      logger.error("Stored item shape invalid", new Error(parsedItem.error), {
+        statusCode: 500,
+        itemId: id,
+      });
+      return errorResponse(500, "Failed to fetch item");
+    }
 
     logger.info("Item fetched", {
       statusCode: 200,
       itemId: id,
     });
 
-    return jsonResponse<Item>(200, response);
+    return jsonResponse<Item>(200, parsedItem.value);
   } catch (err) {
     logger.error("Unexpected error", err, {
       statusCode: 500,

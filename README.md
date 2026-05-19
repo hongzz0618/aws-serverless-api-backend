@@ -140,6 +140,8 @@ Current state:
 - Lambda DynamoDB permissions are scoped to the project table and limited to `PutItem`, `GetItem`, and `DeleteItem`.
 - No secrets should be committed to the repository, Terraform files, Lambda source, or local configuration.
 
+CORS and OPTIONS preflight handling are not configured in this reference implementation. The current examples assume direct API usage with tools such as curl or backend clients. Browser-based clients should add explicit CORS headers and OPTIONS routes with a specific allowed origin rather than using permissive defaults. CORS is not an authentication mechanism.
+
 Before broader use, the API should add an authentication and authorization layer such as Amazon Cognito, a JWT authorizer, IAM authorization, or another identity-aware gateway pattern. Public APIs should also add abuse protection appropriate to the use case.
 
 ## Observability

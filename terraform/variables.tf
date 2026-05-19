@@ -55,7 +55,7 @@ variable "log_retention_days" {
 }
 
 variable "enable_alarms" {
-  description = "Whether to create basic CloudWatch alarms for API Gateway and Lambda."
+  description = "Whether to create basic CloudWatch alarms for API Gateway, Lambda, and DynamoDB."
   type        = bool
   default     = true
 }

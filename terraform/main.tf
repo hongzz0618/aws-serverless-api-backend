@@ -380,3 +380,112 @@ resource "aws_cloudwatch_metric_alarm" "api_5xx_errors" {
     Stage   = aws_api_gateway_stage.dev.stage_name
   }
 }
+
+resource "aws_cloudwatch_metric_alarm" "api_4xx_errors" {
+  count = var.enable_alarms ? 1 : 0
+
+  alarm_name          = "${var.project_name}-api-4xx-errors"
+  alarm_description   = "API Gateway returned at least 10 4XX responses in a 5-minute period."
+  namespace           = "AWS/ApiGateway"
+  metric_name         = "4XXError"
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 10
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.alarm_actions
+
+  dimensions = {
+    ApiName = aws_api_gateway_rest_api.api.name
+    Stage   = aws_api_gateway_stage.dev.stage_name
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "api_latency" {
+  count = var.enable_alarms ? 1 : 0
+
+  alarm_name          = "${var.project_name}-api-latency"
+  alarm_description   = "API Gateway average latency exceeded 1000 ms for two consecutive 5-minute periods."
+  namespace           = "AWS/ApiGateway"
+  metric_name         = "Latency"
+  statistic           = "Average"
+  period              = 300
+  evaluation_periods  = 2
+  threshold           = 1000
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.alarm_actions
+
+  dimensions = {
+    ApiName = aws_api_gateway_rest_api.api.name
+    Stage   = aws_api_gateway_stage.dev.stage_name
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "dynamodb_system_errors" {
+  count = var.enable_alarms ? 1 : 0
+
+  alarm_name          = "${var.project_name}-dynamodb-system-errors"
+  alarm_description   = "DynamoDB reported one or more system errors in a 5-minute period."
+  evaluation_periods  = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.alarm_actions
+
+  metric_query {
+    id          = "system_errors"
+    expression  = "put_errors + get_errors + delete_errors"
+    label       = "DynamoDB system errors"
+    return_data = true
+  }
+
+  metric_query {
+    id = "put_errors"
+
+    metric {
+      namespace   = "AWS/DynamoDB"
+      metric_name = "SystemErrors"
+      period      = 300
+      stat        = "Sum"
+
+      dimensions = {
+        TableName = aws_dynamodb_table.items.name
+        Operation = "PutItem"
+      }
+    }
+  }
+
+  metric_query {
+    id = "get_errors"
+
+    metric {
+      namespace   = "AWS/DynamoDB"
+      metric_name = "SystemErrors"
+      period      = 300
+      stat        = "Sum"
+
+      dimensions = {
+        TableName = aws_dynamodb_table.items.name
+        Operation = "GetItem"
+      }
+    }
+  }
+
+  metric_query {
+    id = "delete_errors"
+
+    metric {
+      namespace   = "AWS/DynamoDB"
+      metric_name = "SystemErrors"
+      period      = 300
+      stat        = "Sum"
+
+      dimensions = {
+        TableName = aws_dynamodb_table.items.name
+        Operation = "DeleteItem"
+      }
+    }
+  }
+}

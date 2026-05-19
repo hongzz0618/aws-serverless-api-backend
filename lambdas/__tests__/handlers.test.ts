@@ -82,6 +82,45 @@ const errorLoggedJson = (): Array<Record<string, unknown>> =>
     ([entry]) => JSON.parse(String(entry)) as Record<string, unknown>
   );
 
+interface MissingTableNameLogExpectation {
+  operation: string;
+  requestId: string;
+  route: string;
+  sensitiveBodyValue?: string;
+}
+
+const expectMissingTableNameLog = ({
+  operation,
+  requestId,
+  route,
+  sensitiveBodyValue,
+}: MissingTableNameLogExpectation) => {
+  const logs = errorLoggedJson();
+
+  expect(logs).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        level: "error",
+        message: "Unexpected error",
+        service: "items-api",
+        requestId,
+        route,
+        operation,
+        statusCode: 500,
+        errorName: "Error",
+        errorMessage: "Missing required environment variable: TABLE_NAME",
+      }),
+    ])
+  );
+  expect(logs).toEqual(
+    expect.not.arrayContaining([expect.objectContaining({ body: expect.anything() })])
+  );
+
+  if (sensitiveBodyValue) {
+    expect(JSON.stringify(logs)).not.toContain(sensitiveBodyValue);
+  }
+};
+
 beforeEach(() => {
   vi.resetModules();
   dynamoMock.send.mockReset();
@@ -226,6 +265,27 @@ describe("createItem handler", () => {
     expect(result.statusCode).toBe(500);
     expect(responseBody(result.body)).toEqual({ error: "Failed to create item" });
   });
+
+  it("returns a safe 500 and logs metadata when TABLE_NAME is missing", async () => {
+    const sensitiveBodyValue = "Config test item";
+    delete process.env.TABLE_NAME;
+    const { handler } = await import("../createItem.js");
+
+    const result = await handler(
+      apiEvent({ body: JSON.stringify({ name: sensitiveBodyValue }) }),
+      { awsRequestId: "request-missing-create-table" } as Context
+    );
+
+    expect(result.statusCode).toBe(500);
+    expect(responseBody(result.body)).toEqual({ error: "Failed to create item" });
+    expect(dynamoMock.send).not.toHaveBeenCalled();
+    expectMissingTableNameLog({
+      operation: "createItem",
+      requestId: "request-missing-create-table",
+      route: "POST /items",
+      sensitiveBodyValue,
+    });
+  });
 });
 
 describe("getItem handler", () => {
@@ -344,6 +404,25 @@ describe("getItem handler", () => {
     expect(result.statusCode).toBe(500);
     expect(responseBody(result.body)).toEqual({ error: "Failed to fetch item" });
   });
+
+  it("returns a safe 500 and logs metadata when TABLE_NAME is missing", async () => {
+    delete process.env.TABLE_NAME;
+    const { handler } = await import("../getItem.js");
+
+    const result = await handler(
+      apiEvent({ pathParameters: { id: TEST_ITEM_ID } }),
+      { awsRequestId: "request-missing-get-table" } as Context
+    );
+
+    expect(result.statusCode).toBe(500);
+    expect(responseBody(result.body)).toEqual({ error: "Failed to fetch item" });
+    expect(dynamoMock.send).not.toHaveBeenCalled();
+    expectMissingTableNameLog({
+      operation: "getItem",
+      requestId: "request-missing-get-table",
+      route: "GET /items/{id}",
+    });
+  });
 });
 
 describe("deleteItem handler", () => {
@@ -412,5 +491,24 @@ describe("deleteItem handler", () => {
 
     expect(result.statusCode).toBe(500);
     expect(responseBody(result.body)).toEqual({ error: "Failed to delete item" });
+  });
+
+  it("returns a safe 500 and logs metadata when TABLE_NAME is missing", async () => {
+    delete process.env.TABLE_NAME;
+    const { handler } = await import("../deleteItem.js");
+
+    const result = await handler(
+      apiEvent({ pathParameters: { id: TEST_ITEM_ID } }),
+      { awsRequestId: "request-missing-delete-table" } as Context
+    );
+
+    expect(result.statusCode).toBe(500);
+    expect(responseBody(result.body)).toEqual({ error: "Failed to delete item" });
+    expect(dynamoMock.send).not.toHaveBeenCalled();
+    expectMissingTableNameLog({
+      operation: "deleteItem",
+      requestId: "request-missing-delete-table",
+      route: "DELETE /items/{id}",
+    });
   });
 });

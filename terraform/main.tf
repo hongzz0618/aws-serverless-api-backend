@@ -282,7 +282,7 @@ resource "aws_lambda_permission" "apigw_create" {
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.create_item.arn
   principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_api_gateway_rest_api.api.execution_arn}/*/*"
+  source_arn    = "${aws_api_gateway_rest_api.api.execution_arn}/*/${aws_api_gateway_method.post_items.http_method}/${aws_api_gateway_resource.items.path_part}"
 }
 
 resource "aws_lambda_permission" "apigw_get" {
@@ -290,7 +290,7 @@ resource "aws_lambda_permission" "apigw_get" {
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.get_item.arn
   principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_api_gateway_rest_api.api.execution_arn}/*/*"
+  source_arn    = "${aws_api_gateway_rest_api.api.execution_arn}/*/${aws_api_gateway_method.get_item.http_method}/${aws_api_gateway_resource.items.path_part}/*"
 }
 
 resource "aws_lambda_permission" "apigw_delete" {
@@ -298,7 +298,7 @@ resource "aws_lambda_permission" "apigw_delete" {
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.delete_item.arn
   principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_api_gateway_rest_api.api.execution_arn}/*/*"
+  source_arn    = "${aws_api_gateway_rest_api.api.execution_arn}/*/${aws_api_gateway_method.delete_item.http_method}/${aws_api_gateway_resource.items.path_part}/*"
 }
 
 locals {

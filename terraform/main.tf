@@ -1,3 +1,8 @@
+locals {
+  lambda_memory_size     = 128
+  lambda_timeout_seconds = 10
+}
+
 # DynamoDB Table
 resource "aws_dynamodb_table" "items" {
   name         = "${var.project_name}-items"
@@ -58,6 +63,8 @@ resource "aws_lambda_function" "create_item" {
   role          = aws_iam_role.lambda_exec.arn
   handler       = "createItem.handler"
   runtime       = "nodejs22.x"
+  memory_size   = local.lambda_memory_size
+  timeout       = local.lambda_timeout_seconds
 
   filename         = "${path.module}/../lambdas/createItem.zip"
   source_code_hash = filebase64sha256("${path.module}/../lambdas/createItem.zip")
@@ -81,6 +88,8 @@ resource "aws_lambda_function" "get_item" {
   role          = aws_iam_role.lambda_exec.arn
   handler       = "getItem.handler"
   runtime       = "nodejs22.x"
+  memory_size   = local.lambda_memory_size
+  timeout       = local.lambda_timeout_seconds
 
   filename         = "${path.module}/../lambdas/getItem.zip"
   source_code_hash = filebase64sha256("${path.module}/../lambdas/getItem.zip")
@@ -104,6 +113,8 @@ resource "aws_lambda_function" "delete_item" {
   role          = aws_iam_role.lambda_exec.arn
   handler       = "deleteItem.handler"
   runtime       = "nodejs22.x"
+  memory_size   = local.lambda_memory_size
+  timeout       = local.lambda_timeout_seconds
 
   filename         = "${path.module}/../lambdas/deleteItem.zip"
   source_code_hash = filebase64sha256("${path.module}/../lambdas/deleteItem.zip")

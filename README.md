@@ -144,6 +144,8 @@ CORS and OPTIONS preflight handling are not configured in this reference impleme
 
 Before broader use, the API should add an authentication and authorization layer such as Amazon Cognito, a JWT authorizer, IAM authorization, or another identity-aware gateway pattern. Public APIs should also add abuse protection appropriate to the use case.
 
+Authentication and access-control options are discussed in [ADR 004](docs/adr/004-authentication-and-access-control-options.md). Authentication is not implemented in this batch; the ADR documents the current risk and the likely next options.
+
 ## Observability
 
 The Lambda handlers emit structured JSON logs to CloudWatch Logs. These logs are designed to be readable by humans and queryable by log tooling.
@@ -248,6 +250,21 @@ terraform output api_url
 
 Use the `api_url` output as `<API_URL>` in the example requests.
 
+### Deployment Safety and State Strategy
+
+GitHub Actions validates the Lambda code, packages deployment artifacts, and checks the Terraform configuration, but it does not automatically deploy to AWS. This is intentional for the current reference scope. Automatic deployment would need account-specific credentials, state management, approval rules, and rollback behavior that should be designed before being wired into CI.
+
+The Terraform configuration currently uses local state unless the operator configures a backend outside this repository. Local state is simple for a single-machine demo, but it is not a good coordination model for shared environments because state can be lost, duplicated, or changed concurrently. A safer path would add a remote backend with locking, then split configuration by environment such as `dev`, `staging`, and `prod`.
+
+Before broader use, deployment automation should add:
+
+- Remote Terraform state with locking
+- Separate variables and state per environment
+- Manual approval before applying infrastructure changes
+- Smoke tests against the deployed API URL after apply
+- A rollback or recovery strategy for failed deployments
+- Clear ownership for secrets, credentials, and AWS account boundaries
+
 ## CI Validation
 
 GitHub Actions runs two jobs:
@@ -318,6 +335,7 @@ Lightweight ADRs capture the main design choices and trade-offs behind this proj
 - [001. Use API Gateway, Lambda, and DynamoDB for the serverless item API](docs/adr/001-use-serverless-api-gateway-lambda-dynamodb.md)
 - [002. Use DynamoDB for Item Storage](docs/adr/002-use-dynamodb-for-item-storage.md)
 - [003. Add Validation, Structured Logs, and Basic Operability Controls](docs/adr/003-operability-validation-and-observability.md)
+- [004. Evaluate Authentication and Access-Control Options](docs/adr/004-authentication-and-access-control-options.md)
 
 ## Architecture Discussion Notes
 

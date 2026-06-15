@@ -11,8 +11,9 @@
   },
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
-    "test": "vitest run"
+    "smoke:test": "node ../scripts/smoke-test.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json"
   },
   "devDependencies": {
     "@types/aws-lambda": "^8.10.152",

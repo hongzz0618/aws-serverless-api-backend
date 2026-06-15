@@ -250,6 +250,19 @@ terraform output api_url
 
 Use the `api_url` output as `<API_URL>` in the example requests.
 
+### Optional Smoke Test
+
+After deployment, the repository includes a small smoke test helper for the basic create, read, and delete flow. It calls the deployed HTTP API directly and does not require AWS credentials.
+
+Run it from the `lambdas` directory with `API_URL` set to the Terraform output value:
+
+```bash
+cd lambdas
+API_URL="<API_URL>" npm run smoke:test
+```
+
+The smoke test is a post-deployment validation helper. It is not part of automatic deployment or the default GitHub Actions workflow because it requires a deployed API URL.
+
 ### Deployment Safety and State Strategy
 
 GitHub Actions validates the Lambda code, packages deployment artifacts, and checks the Terraform configuration, but it does not automatically deploy to AWS. This is intentional for the current reference scope. Automatic deployment would need account-specific credentials, state management, approval rules, and rollback behavior that should be designed before being wired into CI.
@@ -285,6 +298,7 @@ The CI workflow validates the application and infrastructure definitions, but it
 | `lambdas/src/validation/` | Zod request validation |
 | `lambdas/__tests__/` | Vitest unit tests |
 | `scripts/package-lambdas.sh` | Build and packaging script for Lambda zip artifacts |
+| `scripts/smoke-test.mjs` | Optional post-deployment API smoke test |
 | `terraform/` | Terraform configuration for AWS resources |
 | `.github/workflows/ci.yml` | GitHub Actions CI workflow |
 | `diagram/` | Architecture diagram source and rendered image |
@@ -308,7 +322,7 @@ This project is intentionally limited. The main limitations are:
 - Basic CloudWatch alarms are configured, but notifications require optional `alarm_actions`
 - No separate `dev`, `staging`, and `prod` environments
 - No Terraform remote state backend
-- No automated smoke tests against a deployed API
+- No automated smoke tests against a deployed API in CI
 - No CI/CD deployment pipeline
 - Single-table DynamoDB design is intentionally simple and only supports lookup by `id`
 
@@ -369,7 +383,7 @@ Priority improvements:
 - Introduce environment separation for `dev`, `staging`, and `prod`
 - Add Terraform remote state and locking
 - Expand ADR coverage for future design changes
-- Add smoke tests that run against a deployed API URL
+- Wire the smoke test into a controlled post-deployment workflow
 - Add a controlled deployment workflow after validation passes
 
 ## Cleanup

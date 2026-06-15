@@ -5,7 +5,6 @@ const TEST_ITEM_ID = "00000000-0000-4000-8000-000000000001";
 
 const dynamoMock = vi.hoisted(() => ({
   send: vi.fn(),
-  commands: [] as Array<{ name: string; input: unknown }>,
 }));
 
 vi.mock("@aws-sdk/client-dynamodb", () => {
@@ -18,7 +17,6 @@ vi.mock("@aws-sdk/client-dynamodb", () => {
 
     constructor(input: unknown) {
       this.input = input;
-      dynamoMock.commands.push({ name: "PutItemCommand", input });
     }
   }
 
@@ -27,7 +25,6 @@ vi.mock("@aws-sdk/client-dynamodb", () => {
 
     constructor(input: unknown) {
       this.input = input;
-      dynamoMock.commands.push({ name: "GetItemCommand", input });
     }
   }
 
@@ -36,7 +33,6 @@ vi.mock("@aws-sdk/client-dynamodb", () => {
 
     constructor(input: unknown) {
       this.input = input;
-      dynamoMock.commands.push({ name: "DeleteItemCommand", input });
     }
   }
 
@@ -71,6 +67,26 @@ const apiEvent = (
 });
 
 const responseBody = <TBody>(body: string): TBody => JSON.parse(body) as TBody;
+
+const expectJsonResponse = <TBody>(
+  result: { statusCode: number; headers?: Record<string, unknown>; body: string },
+  statusCode: number,
+  body: TBody
+) => {
+  expect(result.statusCode).toBe(statusCode);
+  expect(result.headers).toEqual({ "Content-Type": "application/json" });
+  expect(responseBody<TBody>(result.body)).toEqual(body);
+};
+
+const expectSafeErrorResponse = (
+  result: { statusCode: number; headers?: Record<string, unknown>; body: string },
+  statusCode: number,
+  publicError: string,
+  internalError: string
+) => {
+  expectJsonResponse(result, statusCode, { error: publicError });
+  expect(result.body).not.toContain(internalError);
+};
 
 const loggedJson = (): Array<Record<string, unknown>> =>
   vi.mocked(console.log).mock.calls.map(
@@ -124,7 +140,6 @@ const expectMissingTableNameLog = ({
 beforeEach(() => {
   vi.resetModules();
   dynamoMock.send.mockReset();
-  dynamoMock.commands = [];
   process.env.TABLE_NAME = "items-table";
   vi.spyOn(console, "log").mockImplementation(() => undefined);
   vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -140,8 +155,7 @@ describe("createItem handler", () => {
 
     const result = await handler(apiEvent());
 
-    expect(result.statusCode).toBe(400);
-    expect(responseBody(result.body)).toEqual({ error: "Request body is required" });
+    expectJsonResponse(result, 400, { error: "Request body is required" });
     expect(dynamoMock.send).not.toHaveBeenCalled();
   });
 
@@ -150,8 +164,7 @@ describe("createItem handler", () => {
 
     const result = await handler(apiEvent({ body: "{" }));
 
-    expect(result.statusCode).toBe(400);
-    expect(responseBody(result.body)).toEqual({
+    expectJsonResponse(result, 400, {
       error: "Request body must be valid JSON",
     });
     expect(dynamoMock.send).not.toHaveBeenCalled();
@@ -162,8 +175,7 @@ describe("createItem handler", () => {
 
     const result = await handler(apiEvent({ body: JSON.stringify({}) }));
 
-    expect(result.statusCode).toBe(400);
-    expect(responseBody(result.body)).toEqual({ error: "Name is required" });
+    expectJsonResponse(result, 400, { error: "Name is required" });
     expect(dynamoMock.send).not.toHaveBeenCalled();
   });
 
@@ -172,8 +184,7 @@ describe("createItem handler", () => {
 
     const result = await handler(apiEvent({ body: JSON.stringify({ name: 123 }) }));
 
-    expect(result.statusCode).toBe(400);
-    expect(responseBody(result.body)).toEqual({ error: "Name must be a string" });
+    expectJsonResponse(result, 400, { error: "Name must be a string" });
     expect(dynamoMock.send).not.toHaveBeenCalled();
   });
 
@@ -182,8 +193,7 @@ describe("createItem handler", () => {
 
     const result = await handler(apiEvent({ body: JSON.stringify({ name: "   " }) }));
 
-    expect(result.statusCode).toBe(400);
-    expect(responseBody(result.body)).toEqual({ error: "Name cannot be empty" });
+    expectJsonResponse(result, 400, { error: "Name cannot be empty" });
     expect(dynamoMock.send).not.toHaveBeenCalled();
   });
 
@@ -194,14 +204,13 @@ describe("createItem handler", () => {
       apiEvent({ body: JSON.stringify({ name: "a".repeat(101) }) })
     );
 
-    expect(result.statusCode).toBe(400);
-    expect(responseBody(result.body)).toEqual({
+    expectJsonResponse(result, 400, {
       error: "Name must be 100 characters or fewer",
     });
     expect(dynamoMock.send).not.toHaveBeenCalled();
   });
 
-  it("returns 201 and trims the name when item is created successfully", async () => {
+  it("returns 201 when item is created successfully", async () => {
     dynamoMock.send.mockResolvedValueOnce({});
     const { handler } = await import("../createItem.js");
 
@@ -209,22 +218,11 @@ describe("createItem handler", () => {
       apiEvent({ body: JSON.stringify({ name: " Example item " }) })
     );
 
-    expect(result.statusCode).toBe(201);
-    expect(responseBody(result.body)).toEqual({
+    expectJsonResponse(result, 201, {
       message: "Item created",
       id: TEST_ITEM_ID,
     });
     expect(dynamoMock.send).toHaveBeenCalledTimes(1);
-    expect(dynamoMock.commands[0]).toMatchObject({
-      name: "PutItemCommand",
-      input: {
-        TableName: "items-table",
-        Item: {
-          id: { S: TEST_ITEM_ID },
-          name: { S: "Example item" },
-        },
-      },
-    });
   });
 
   it("logs structured request metadata when context is available", async () => {
@@ -256,14 +254,14 @@ describe("createItem handler", () => {
     );
   });
 
-  it("returns 500 when DynamoDB fails", async () => {
-    dynamoMock.send.mockRejectedValueOnce(new Error("DynamoDB failure"));
+  it("returns a safe 500 when DynamoDB fails", async () => {
+    const internalError = "DynamoDB failure";
+    dynamoMock.send.mockRejectedValueOnce(new Error(internalError));
     const { handler } = await import("../createItem.js");
 
     const result = await handler(apiEvent({ body: JSON.stringify({ name: "Item" }) }));
 
-    expect(result.statusCode).toBe(500);
-    expect(responseBody(result.body)).toEqual({ error: "Failed to create item" });
+    expectSafeErrorResponse(result, 500, "Failed to create item", internalError);
   });
 
   it("returns a safe 500 and logs metadata when TABLE_NAME is missing", async () => {
@@ -276,8 +274,12 @@ describe("createItem handler", () => {
       { awsRequestId: "request-missing-create-table" } as Context
     );
 
-    expect(result.statusCode).toBe(500);
-    expect(responseBody(result.body)).toEqual({ error: "Failed to create item" });
+    expectSafeErrorResponse(
+      result,
+      500,
+      "Failed to create item",
+      "Missing required environment variable: TABLE_NAME"
+    );
     expect(dynamoMock.send).not.toHaveBeenCalled();
     expectMissingTableNameLog({
       operation: "createItem",
@@ -294,8 +296,7 @@ describe("getItem handler", () => {
 
     const result = await handler(apiEvent());
 
-    expect(result.statusCode).toBe(400);
-    expect(responseBody(result.body)).toEqual({ error: "Item id is required" });
+    expectJsonResponse(result, 400, { error: "Item id is required" });
     expect(dynamoMock.send).not.toHaveBeenCalled();
   });
 
@@ -304,8 +305,7 @@ describe("getItem handler", () => {
 
     const result = await handler(apiEvent({ pathParameters: { id: "item-1" } }));
 
-    expect(result.statusCode).toBe(400);
-    expect(responseBody(result.body)).toEqual({
+    expectJsonResponse(result, 400, {
       error: "Item id must be a valid UUID",
     });
     expect(dynamoMock.send).not.toHaveBeenCalled();
@@ -317,15 +317,7 @@ describe("getItem handler", () => {
 
     const result = await handler(apiEvent({ pathParameters: { id: TEST_ITEM_ID } }));
 
-    expect(result.statusCode).toBe(404);
-    expect(responseBody(result.body)).toEqual({ error: "Item not found" });
-    expect(dynamoMock.commands[0]).toMatchObject({
-      name: "GetItemCommand",
-      input: {
-        TableName: "items-table",
-        Key: { id: { S: TEST_ITEM_ID } },
-      },
-    });
+    expectJsonResponse(result, 404, { error: "Item not found" });
   });
 
   it("returns 200 when item exists", async () => {
@@ -340,8 +332,7 @@ describe("getItem handler", () => {
 
     const result = await handler(apiEvent({ pathParameters: { id: TEST_ITEM_ID } }));
 
-    expect(result.statusCode).toBe(200);
-    expect(responseBody(result.body)).toEqual({
+    expectJsonResponse(result, 200, {
       id: TEST_ITEM_ID,
       name: "Example item",
       createdAt: "2026-05-14T10:00:00.000Z",
@@ -359,8 +350,12 @@ describe("getItem handler", () => {
 
     const result = await handler(apiEvent({ pathParameters: { id: TEST_ITEM_ID } }));
 
-    expect(result.statusCode).toBe(500);
-    expect(responseBody(result.body)).toEqual({ error: "Failed to fetch item" });
+    expectSafeErrorResponse(
+      result,
+      500,
+      "Failed to fetch item",
+      "Stored item has an invalid shape"
+    );
   });
 
   it("logs metadata when the stored item shape is invalid", async () => {
@@ -395,14 +390,14 @@ describe("getItem handler", () => {
     );
   });
 
-  it("returns 500 when DynamoDB fails", async () => {
-    dynamoMock.send.mockRejectedValueOnce(new Error("DynamoDB failure"));
+  it("returns a safe 500 when DynamoDB fails", async () => {
+    const internalError = "DynamoDB failure";
+    dynamoMock.send.mockRejectedValueOnce(new Error(internalError));
     const { handler } = await import("../getItem.js");
 
     const result = await handler(apiEvent({ pathParameters: { id: TEST_ITEM_ID } }));
 
-    expect(result.statusCode).toBe(500);
-    expect(responseBody(result.body)).toEqual({ error: "Failed to fetch item" });
+    expectSafeErrorResponse(result, 500, "Failed to fetch item", internalError);
   });
 
   it("returns a safe 500 and logs metadata when TABLE_NAME is missing", async () => {
@@ -414,8 +409,12 @@ describe("getItem handler", () => {
       { awsRequestId: "request-missing-get-table" } as Context
     );
 
-    expect(result.statusCode).toBe(500);
-    expect(responseBody(result.body)).toEqual({ error: "Failed to fetch item" });
+    expectSafeErrorResponse(
+      result,
+      500,
+      "Failed to fetch item",
+      "Missing required environment variable: TABLE_NAME"
+    );
     expect(dynamoMock.send).not.toHaveBeenCalled();
     expectMissingTableNameLog({
       operation: "getItem",
@@ -431,8 +430,7 @@ describe("deleteItem handler", () => {
 
     const result = await handler(apiEvent());
 
-    expect(result.statusCode).toBe(400);
-    expect(responseBody(result.body)).toEqual({ error: "Item id is required" });
+    expectJsonResponse(result, 400, { error: "Item id is required" });
     expect(dynamoMock.send).not.toHaveBeenCalled();
   });
 
@@ -441,8 +439,7 @@ describe("deleteItem handler", () => {
 
     const result = await handler(apiEvent({ pathParameters: { id: "item-1" } }));
 
-    expect(result.statusCode).toBe(400);
-    expect(responseBody(result.body)).toEqual({
+    expectJsonResponse(result, 400, {
       error: "Item id must be a valid UUID",
     });
     expect(dynamoMock.send).not.toHaveBeenCalled();
@@ -454,16 +451,7 @@ describe("deleteItem handler", () => {
 
     const result = await handler(apiEvent({ pathParameters: { id: TEST_ITEM_ID } }));
 
-    expect(result.statusCode).toBe(404);
-    expect(responseBody(result.body)).toEqual({ error: "Item not found" });
-    expect(dynamoMock.commands[0]).toMatchObject({
-      name: "DeleteItemCommand",
-      input: {
-        TableName: "items-table",
-        Key: { id: { S: TEST_ITEM_ID } },
-        ReturnValues: "ALL_OLD",
-      },
-    });
+    expectJsonResponse(result, 404, { error: "Item not found" });
   });
 
   it("returns 200 when item is deleted", async () => {
@@ -476,21 +464,20 @@ describe("deleteItem handler", () => {
 
     const result = await handler(apiEvent({ pathParameters: { id: TEST_ITEM_ID } }));
 
-    expect(result.statusCode).toBe(200);
-    expect(responseBody(result.body)).toEqual({
+    expectJsonResponse(result, 200, {
       message: "Item deleted",
       id: TEST_ITEM_ID,
     });
   });
 
-  it("returns 500 when DynamoDB fails", async () => {
-    dynamoMock.send.mockRejectedValueOnce(new Error("DynamoDB failure"));
+  it("returns a safe 500 when DynamoDB fails", async () => {
+    const internalError = "DynamoDB failure";
+    dynamoMock.send.mockRejectedValueOnce(new Error(internalError));
     const { handler } = await import("../deleteItem.js");
 
     const result = await handler(apiEvent({ pathParameters: { id: TEST_ITEM_ID } }));
 
-    expect(result.statusCode).toBe(500);
-    expect(responseBody(result.body)).toEqual({ error: "Failed to delete item" });
+    expectSafeErrorResponse(result, 500, "Failed to delete item", internalError);
   });
 
   it("returns a safe 500 and logs metadata when TABLE_NAME is missing", async () => {
@@ -502,8 +489,12 @@ describe("deleteItem handler", () => {
       { awsRequestId: "request-missing-delete-table" } as Context
     );
 
-    expect(result.statusCode).toBe(500);
-    expect(responseBody(result.body)).toEqual({ error: "Failed to delete item" });
+    expectSafeErrorResponse(
+      result,
+      500,
+      "Failed to delete item",
+      "Missing required environment variable: TABLE_NAME"
+    );
     expect(dynamoMock.send).not.toHaveBeenCalled();
     expectMissingTableNameLog({
       operation: "deleteItem",

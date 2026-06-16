@@ -263,6 +263,8 @@ API_URL="<API_URL>" npm run smoke:test
 
 The smoke test is a post-deployment validation helper. It is not part of automatic deployment or the default GitHub Actions workflow because it requires a deployed API URL.
 
+For deployment validation, logs, alarms, common failures, and cleanup notes, see the [operations runbook](docs/operations.md).
+
 ### Deployment Safety and State Strategy
 
 GitHub Actions validates the Lambda code, packages deployment artifacts, and checks the Terraform configuration, but it does not automatically deploy to AWS. This is intentional for the current reference scope. Automatic deployment would need account-specific credentials, state management, approval rules, and rollback behavior that should be designed before being wired into CI.

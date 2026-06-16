@@ -20,6 +20,9 @@ const client = new DynamoDBClient();
 const route = "POST /items";
 const operation = "createItem";
 
+const isConditionalCheckFailed = (err: unknown): boolean =>
+  err instanceof Error && err.name === "ConditionalCheckFailedException";
+
 export const handler = async (
   event: APIGatewayProxyEvent,
   context?: Context
@@ -54,6 +57,10 @@ export const handler = async (
     const input: PutItemCommandInput = {
       TableName: tableName,
       Item: item,
+      ConditionExpression: "attribute_not_exists(#id)",
+      ExpressionAttributeNames: {
+        "#id": "id",
+      },
     };
 
     await client.send(new PutItemCommand(input));
@@ -65,6 +72,13 @@ export const handler = async (
 
     return jsonResponse<CreateItemResponse>(201, { message: "Item created", id });
   } catch (err) {
+    if (isConditionalCheckFailed(err)) {
+      logger.warn("Item already exists", {
+        statusCode: 409,
+      });
+      return errorResponse(409, "Item already exists");
+    }
+
     logger.error("Unexpected error", err, {
       statusCode: 500,
     });

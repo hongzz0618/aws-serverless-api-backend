@@ -264,6 +264,18 @@ describe("createItem handler", () => {
     expectSafeErrorResponse(result, 500, "Failed to create item", internalError);
   });
 
+  it("returns a safe 409 when the item id already exists", async () => {
+    const internalError = "Conditional request failed for existing item";
+    const duplicateError = new Error(internalError);
+    duplicateError.name = "ConditionalCheckFailedException";
+    dynamoMock.send.mockRejectedValueOnce(duplicateError);
+    const { handler } = await import("../createItem.js");
+
+    const result = await handler(apiEvent({ body: JSON.stringify({ name: "Item" }) }));
+
+    expectSafeErrorResponse(result, 409, "Item already exists", internalError);
+  });
+
   it("returns a safe 500 and logs metadata when TABLE_NAME is missing", async () => {
     const sensitiveBodyValue = "Config test item";
     delete process.env.TABLE_NAME;

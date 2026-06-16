@@ -350,6 +350,7 @@ Lightweight ADRs capture the main design choices and trade-offs behind this proj
 - [002. Use DynamoDB for Item Storage](docs/adr/002-use-dynamodb-for-item-storage.md)
 - [003. Add Validation, Structured Logs, and Basic Operability Controls](docs/adr/003-operability-validation-and-observability.md)
 - [004. Evaluate Authentication and Access-Control Options](docs/adr/004-authentication-and-access-control-options.md)
+- [005. Use Conditional Writes for Item Creation](docs/adr/005-use-conditional-writes-for-item-creation.md)
 
 ## Architecture Discussion Notes
 

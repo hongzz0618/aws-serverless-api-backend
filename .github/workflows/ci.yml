@@ -64,6 +64,7 @@ jobs:
           path: |
             lambdas/createItem.zip
             lambdas/getItem.zip
+            lambdas/updateItem.zip
             lambdas/deleteItem.zip
           if-no-files-found: error
 

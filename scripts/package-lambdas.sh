@@ -16,6 +16,7 @@ package_prod_dir="$lambda_dir/.package-prod"
 required_files=(
   "createItem.ts"
   "getItem.ts"
+  "updateItem.ts"
   "deleteItem.ts"
   "package.json"
   "package-lock.json"
@@ -25,6 +26,7 @@ required_files=(
 handlers=(
   "dist/createItem.js:createItem.zip"
   "dist/getItem.js:getItem.zip"
+  "dist/updateItem.js:updateItem.zip"
   "dist/deleteItem.js:deleteItem.zip"
 )
 
@@ -81,7 +83,7 @@ for handler_package in "${handlers[@]}"; do
 done
 
 echo "Removing old Lambda packages..."
-rm -f createItem.zip getItem.zip deleteItem.zip
+rm -f createItem.zip getItem.zip updateItem.zip deleteItem.zip
 rm -rf "$package_tmp_dir"
 rm -rf "$package_prod_dir"
 mkdir -p "$package_tmp_dir"

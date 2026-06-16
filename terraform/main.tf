@@ -45,6 +45,7 @@ resource "aws_iam_role_policy" "lambda_dynamodb_items" {
       Action = [
         "dynamodb:PutItem",
         "dynamodb:GetItem",
+        "dynamodb:UpdateItem",
         "dynamodb:DeleteItem"
       ]
       Resource = aws_dynamodb_table.items.arn
@@ -101,6 +102,31 @@ resource "aws_lambda_function" "get_item" {
   }
 
   depends_on = [aws_cloudwatch_log_group.get_item]
+}
+
+resource "aws_cloudwatch_log_group" "update_item" {
+  name              = "/aws/lambda/${var.project_name}-update"
+  retention_in_days = var.log_retention_days
+}
+
+resource "aws_lambda_function" "update_item" {
+  function_name = "${var.project_name}-update"
+  role          = aws_iam_role.lambda_exec.arn
+  handler       = "updateItem.handler"
+  runtime       = "nodejs22.x"
+  memory_size   = local.lambda_memory_size
+  timeout       = local.lambda_timeout_seconds
+
+  filename         = "${path.module}/../lambdas/updateItem.zip"
+  source_code_hash = filebase64sha256("${path.module}/../lambdas/updateItem.zip")
+
+  environment {
+    variables = {
+      TABLE_NAME = aws_dynamodb_table.items.name
+    }
+  }
+
+  depends_on = [aws_cloudwatch_log_group.update_item]
 }
 
 resource "aws_cloudwatch_log_group" "delete_item" {
@@ -209,6 +235,23 @@ resource "aws_api_gateway_integration" "get_item" {
   uri                     = aws_lambda_function.get_item.invoke_arn
 }
 
+# PUT /items/{id}
+resource "aws_api_gateway_method" "put_item" {
+  rest_api_id   = aws_api_gateway_rest_api.api.id
+  resource_id   = aws_api_gateway_resource.item.id
+  http_method   = "PUT"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "put_item" {
+  rest_api_id             = aws_api_gateway_rest_api.api.id
+  resource_id             = aws_api_gateway_resource.item.id
+  http_method             = aws_api_gateway_method.put_item.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.update_item.invoke_arn
+}
+
 # DELETE /items/{id}
 resource "aws_api_gateway_method" "delete_item" {
   rest_api_id   = aws_api_gateway_rest_api.api.id
@@ -234,9 +277,11 @@ resource "aws_api_gateway_deployment" "deployment" {
     redeployment = sha1(jsonencode([
       aws_api_gateway_method.post_items.id,
       aws_api_gateway_method.get_item.id,
+      aws_api_gateway_method.put_item.id,
       aws_api_gateway_method.delete_item.id,
       aws_api_gateway_integration.post_items.id,
       aws_api_gateway_integration.get_item.id,
+      aws_api_gateway_integration.put_item.id,
       aws_api_gateway_integration.delete_item.id
     ]))
   }
@@ -244,6 +289,7 @@ resource "aws_api_gateway_deployment" "deployment" {
   depends_on = [
     aws_api_gateway_integration.post_items,
     aws_api_gateway_integration.get_item,
+    aws_api_gateway_integration.put_item,
     aws_api_gateway_integration.delete_item
   ]
 
@@ -304,6 +350,14 @@ resource "aws_lambda_permission" "apigw_get" {
   source_arn    = "${aws_api_gateway_rest_api.api.execution_arn}/*/${aws_api_gateway_method.get_item.http_method}/${aws_api_gateway_resource.items.path_part}/*"
 }
 
+resource "aws_lambda_permission" "apigw_update" {
+  statement_id  = "AllowAPIGatewayInvokeUpdate"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.update_item.arn
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_api_gateway_rest_api.api.execution_arn}/*/${aws_api_gateway_method.put_item.http_method}/${aws_api_gateway_resource.items.path_part}/*"
+}
+
 resource "aws_lambda_permission" "apigw_delete" {
   statement_id  = "AllowAPIGatewayInvokeDelete"
   action        = "lambda:InvokeFunction"
@@ -316,6 +370,7 @@ locals {
   lambda_functions = {
     create = aws_lambda_function.create_item.function_name
     get    = aws_lambda_function.get_item.function_name
+    update = aws_lambda_function.update_item.function_name
     delete = aws_lambda_function.delete_item.function_name
   }
 }
@@ -436,7 +491,7 @@ resource "aws_cloudwatch_metric_alarm" "dynamodb_system_errors" {
 
   metric_query {
     id          = "system_errors"
-    expression  = "put_errors + get_errors + delete_errors"
+    expression  = "put_errors + get_errors + update_errors + delete_errors"
     label       = "DynamoDB system errors"
     return_data = true
   }
@@ -485,6 +540,22 @@ resource "aws_cloudwatch_metric_alarm" "dynamodb_system_errors" {
       dimensions = {
         TableName = aws_dynamodb_table.items.name
         Operation = "DeleteItem"
+      }
+    }
+  }
+
+  metric_query {
+    id = "update_errors"
+
+    metric {
+      namespace   = "AWS/DynamoDB"
+      metric_name = "SystemErrors"
+      period      = 300
+      stat        = "Sum"
+
+      dimensions = {
+        TableName = aws_dynamodb_table.items.name
+        Operation = "UpdateItem"
       }
     }
   }

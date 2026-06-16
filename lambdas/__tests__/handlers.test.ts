@@ -36,11 +36,20 @@ vi.mock("@aws-sdk/client-dynamodb", () => {
     }
   }
 
+  class UpdateItemCommand {
+    input: unknown;
+
+    constructor(input: unknown) {
+      this.input = input;
+    }
+  }
+
   return {
     DynamoDBClient,
     PutItemCommand,
     GetItemCommand,
     DeleteItemCommand,
+    UpdateItemCommand,
   };
 });
 
@@ -465,6 +474,236 @@ describe("getItem handler", () => {
       requestId: "request-missing-get-table",
       route: "GET /items/{id}",
     });
+  });
+});
+
+describe("updateItem handler", () => {
+  it("returns 200 with the updated item and incremented version", async () => {
+    dynamoMock.send
+      .mockResolvedValueOnce({
+        Item: {
+          id: { S: TEST_ITEM_ID },
+          name: { S: "Original item" },
+          createdAt: { S: "2026-05-14T10:00:00.000Z" },
+          version: { N: "2" },
+        },
+      })
+      .mockResolvedValueOnce({
+        Attributes: {
+          id: { S: TEST_ITEM_ID },
+          name: { S: "Updated item" },
+          createdAt: { S: "2026-05-14T10:00:00.000Z" },
+          version: { N: "3" },
+        },
+      });
+    const { handler } = await import("../updateItem.js");
+
+    const result = await handler(
+      apiEvent({
+        pathParameters: { id: TEST_ITEM_ID },
+        body: JSON.stringify({ name: " Updated item ", version: 2 }),
+      })
+    );
+
+    expectJsonResponse(result, 200, {
+      id: TEST_ITEM_ID,
+      name: "Updated item",
+      createdAt: "2026-05-14T10:00:00.000Z",
+      version: 3,
+    });
+    expect(dynamoMock.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("updates a legacy item without version when submitted version is 1", async () => {
+    dynamoMock.send
+      .mockResolvedValueOnce({
+        Item: {
+          id: { S: TEST_ITEM_ID },
+          name: { S: "Legacy item" },
+          createdAt: { S: "2026-05-14T10:00:00.000Z" },
+        },
+      })
+      .mockResolvedValueOnce({
+        Attributes: {
+          id: { S: TEST_ITEM_ID },
+          name: { S: "Updated legacy item" },
+          createdAt: { S: "2026-05-14T10:00:00.000Z" },
+          version: { N: "2" },
+        },
+      });
+    const { handler } = await import("../updateItem.js");
+
+    const result = await handler(
+      apiEvent({
+        pathParameters: { id: TEST_ITEM_ID },
+        body: JSON.stringify({ name: "Updated legacy item", version: 1 }),
+      })
+    );
+
+    expectJsonResponse(result, 200, {
+      id: TEST_ITEM_ID,
+      name: "Updated legacy item",
+      createdAt: "2026-05-14T10:00:00.000Z",
+      version: 2,
+    });
+    expect(dynamoMock.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({
+          ConditionExpression:
+            "attribute_exists(#id) AND (#version = :expectedVersion OR attribute_not_exists(#version))",
+          ExpressionAttributeValues: expect.objectContaining({
+            ":expectedVersion": { N: "1" },
+            ":nextVersion": { N: "2" },
+          }),
+        }),
+      })
+    );
+  });
+
+  it("returns a safe 409 for a legacy item without version when submitted version is not 1", async () => {
+    const internalError = "Conditional request failed for legacy stale version";
+    const conflictError = new Error(internalError);
+    conflictError.name = "ConditionalCheckFailedException";
+    dynamoMock.send
+      .mockResolvedValueOnce({
+        Item: {
+          id: { S: TEST_ITEM_ID },
+          name: { S: "Legacy item" },
+          createdAt: { S: "2026-05-14T10:00:00.000Z" },
+        },
+      })
+      .mockRejectedValueOnce(conflictError);
+    const { handler } = await import("../updateItem.js");
+
+    const result = await handler(
+      apiEvent({
+        pathParameters: { id: TEST_ITEM_ID },
+        body: JSON.stringify({ name: "Updated legacy item", version: 2 }),
+      })
+    );
+
+    expectSafeErrorResponse(result, 409, "Item version conflict", internalError);
+    expect(dynamoMock.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({
+          ConditionExpression: "attribute_exists(#id) AND #version = :expectedVersion",
+          ExpressionAttributeValues: expect.objectContaining({
+            ":expectedVersion": { N: "2" },
+            ":nextVersion": { N: "3" },
+          }),
+        }),
+      })
+    );
+  });
+
+  it("returns 400 when the request body is invalid", async () => {
+    const { handler } = await import("../updateItem.js");
+
+    const result = await handler(
+      apiEvent({
+        pathParameters: { id: TEST_ITEM_ID },
+        body: JSON.stringify({ name: "Updated item" }),
+      })
+    );
+
+    expectJsonResponse(result, 400, { error: "Version is required" });
+    expect(dynamoMock.send).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when id is not a valid UUID", async () => {
+    const { handler } = await import("../updateItem.js");
+
+    const result = await handler(
+      apiEvent({
+        pathParameters: { id: "item-1" },
+        body: JSON.stringify({ name: "Updated item", version: 1 }),
+      })
+    );
+
+    expectJsonResponse(result, 400, {
+      error: "Item id must be a valid UUID",
+    });
+    expect(dynamoMock.send).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when item does not exist", async () => {
+    dynamoMock.send.mockResolvedValueOnce({});
+    const { handler } = await import("../updateItem.js");
+
+    const result = await handler(
+      apiEvent({
+        pathParameters: { id: TEST_ITEM_ID },
+        body: JSON.stringify({ name: "Updated item", version: 1 }),
+      })
+    );
+
+    expectJsonResponse(result, 404, { error: "Item not found" });
+    expect(dynamoMock.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns a safe 409 when the item version is stale", async () => {
+    const internalError = "Conditional request failed for stale version";
+    const conflictError = new Error(internalError);
+    conflictError.name = "ConditionalCheckFailedException";
+    dynamoMock.send
+      .mockResolvedValueOnce({
+        Item: {
+          id: { S: TEST_ITEM_ID },
+          name: { S: "Current item" },
+          createdAt: { S: "2026-05-14T10:00:00.000Z" },
+          version: { N: "2" },
+        },
+      })
+      .mockRejectedValueOnce(conflictError);
+    const { handler } = await import("../updateItem.js");
+
+    const result = await handler(
+      apiEvent({
+        pathParameters: { id: TEST_ITEM_ID },
+        body: JSON.stringify({ name: "Updated item", version: 1 }),
+      })
+    );
+
+    expectSafeErrorResponse(result, 409, "Item version conflict", internalError);
+  });
+
+  it("returns a safe 500 when DynamoDB read fails", async () => {
+    const internalError = "DynamoDB get failure";
+    dynamoMock.send.mockRejectedValueOnce(new Error(internalError));
+    const { handler } = await import("../updateItem.js");
+
+    const result = await handler(
+      apiEvent({
+        pathParameters: { id: TEST_ITEM_ID },
+        body: JSON.stringify({ name: "Updated item", version: 1 }),
+      })
+    );
+
+    expectSafeErrorResponse(result, 500, "Failed to update item", internalError);
+  });
+
+  it("returns a safe 500 when DynamoDB update fails", async () => {
+    const internalError = "DynamoDB update failure";
+    dynamoMock.send
+      .mockResolvedValueOnce({
+        Item: {
+          id: { S: TEST_ITEM_ID },
+          name: { S: "Current item" },
+          createdAt: { S: "2026-05-14T10:00:00.000Z" },
+          version: { N: "1" },
+        },
+      })
+      .mockRejectedValueOnce(new Error(internalError));
+    const { handler } = await import("../updateItem.js");
+
+    const result = await handler(
+      apiEvent({
+        pathParameters: { id: TEST_ITEM_ID },
+        body: JSON.stringify({ name: "Updated item", version: 1 }),
+      })
+    );
+
+    expectSafeErrorResponse(result, 500, "Failed to update item", internalError);
   });
 });
 

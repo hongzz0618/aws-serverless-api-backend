@@ -18,6 +18,11 @@ interface CreateItemBody {
   name: string;
 }
 
+interface UpdateItemBody {
+  name: string;
+  version: number;
+}
+
 const createItemBodySchema = z.object({
   name: z
     .string({ error: "Name must be a string" })
@@ -26,6 +31,13 @@ const createItemBodySchema = z.object({
     .max(ITEM_NAME_MAX_LENGTH, {
       error: `Name must be ${ITEM_NAME_MAX_LENGTH} characters or fewer`,
     }),
+});
+
+const updateItemBodySchema = createItemBodySchema.extend({
+  version: z
+    .number({ error: "Version must be a number" })
+    .int({ error: "Version must be a positive integer" })
+    .positive({ error: "Version must be a positive integer" }),
 });
 
 const itemIdSchema = z.uuid({
@@ -77,6 +89,54 @@ export const validateCreateItemBody = (
   }
 
   const result = createItemBodySchema.safeParse(parsedBody.value);
+
+  if (!result.success) {
+    return {
+      ok: false,
+      error: result.error.issues[0]?.message ?? "Invalid request body",
+    };
+  }
+
+  return {
+    ok: true,
+    value: result.data,
+  };
+};
+
+export const validateUpdateItemBody = (
+  body: string | null
+): ValidationResult<UpdateItemBody> => {
+  if (!body) {
+    return {
+      ok: false,
+      error: "Request body is required",
+    };
+  }
+
+  const parsedBody = parseJson(body);
+
+  if (!parsedBody.ok) {
+    return {
+      ok: false,
+      error: "Request body must be valid JSON",
+    };
+  }
+
+  if (!isJsonObject(parsedBody.value) || !("name" in parsedBody.value)) {
+    return {
+      ok: false,
+      error: "Name is required",
+    };
+  }
+
+  if (!("version" in parsedBody.value)) {
+    return {
+      ok: false,
+      error: "Version is required",
+    };
+  }
+
+  const result = updateItemBodySchema.safeParse(parsedBody.value);
 
   if (!result.success) {
     return {

@@ -221,8 +221,18 @@ describe("createItem handler", () => {
     expectJsonResponse(result, 201, {
       message: "Item created",
       id: TEST_ITEM_ID,
+      version: 1,
     });
     expect(dynamoMock.send).toHaveBeenCalledTimes(1);
+    expect(dynamoMock.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({
+          Item: expect.objectContaining({
+            version: { N: "1" },
+          }),
+        }),
+      })
+    );
   });
 
   it("logs structured request metadata when context is available", async () => {
@@ -332,12 +342,13 @@ describe("getItem handler", () => {
     expectJsonResponse(result, 404, { error: "Item not found" });
   });
 
-  it("returns 200 when item exists", async () => {
+  it("returns 200 with version when item exists", async () => {
     dynamoMock.send.mockResolvedValueOnce({
       Item: {
         id: { S: TEST_ITEM_ID },
         name: { S: "Example item" },
         createdAt: { S: "2026-05-14T10:00:00.000Z" },
+        version: { N: "3" },
       },
     });
     const { handler } = await import("../getItem.js");
@@ -348,6 +359,27 @@ describe("getItem handler", () => {
       id: TEST_ITEM_ID,
       name: "Example item",
       createdAt: "2026-05-14T10:00:00.000Z",
+      version: 3,
+    });
+  });
+
+  it("returns version 1 for legacy items without a version attribute", async () => {
+    dynamoMock.send.mockResolvedValueOnce({
+      Item: {
+        id: { S: TEST_ITEM_ID },
+        name: { S: "Legacy item" },
+        createdAt: { S: "2026-05-14T10:00:00.000Z" },
+      },
+    });
+    const { handler } = await import("../getItem.js");
+
+    const result = await handler(apiEvent({ pathParameters: { id: TEST_ITEM_ID } }));
+
+    expectJsonResponse(result, 200, {
+      id: TEST_ITEM_ID,
+      name: "Legacy item",
+      createdAt: "2026-05-14T10:00:00.000Z",
+      version: 1,
     });
   });
 

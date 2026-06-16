@@ -53,6 +53,7 @@ export const handler = async (
       id: { S: id },
       name: { S: validation.value.name },
       createdAt: { S: new Date().toISOString() },
+      version: { N: "1" },
     };
     const input: PutItemCommandInput = {
       TableName: tableName,
@@ -70,7 +71,11 @@ export const handler = async (
       itemId: id,
     });
 
-    return jsonResponse<CreateItemResponse>(201, { message: "Item created", id });
+    return jsonResponse<CreateItemResponse>(201, {
+      message: "Item created",
+      id,
+      version: 1,
+    });
   } catch (err) {
     if (isConditionalCheckFailed(err)) {
       logger.warn("Item already exists", {

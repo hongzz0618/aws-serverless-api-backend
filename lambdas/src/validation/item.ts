@@ -36,10 +36,15 @@ const dynamoDbStringAttributeSchema = z.object({
   S: z.string(),
 });
 
+const dynamoDbNumberAttributeSchema = z.object({
+  N: z.string().regex(/^[1-9]\d*$/),
+});
+
 const storedItemSchema = z.object({
   id: dynamoDbStringAttributeSchema,
   name: dynamoDbStringAttributeSchema,
   createdAt: dynamoDbStringAttributeSchema,
+  version: dynamoDbNumberAttributeSchema.optional(),
 });
 
 const isJsonObject = (value: unknown): value is Record<string, unknown> =>
@@ -127,6 +132,7 @@ export const parseStoredItem = (item: unknown): ValidationResult<Item> => {
       id: result.data.id.S,
       name: result.data.name.S,
       createdAt: result.data.createdAt.S,
+      version: result.data.version ? Number(result.data.version.N) : 1,
     },
   };
 };

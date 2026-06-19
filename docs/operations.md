@@ -21,7 +21,7 @@ curl -X POST "<API_URL>/items" \
   -d '{"name":"Laptop charger"}'
 ```
 
-Expected result: `201 Created` with a JSON body containing `message` and `id`.
+Expected result: `201 Created` with a JSON body containing `message`, `id`, and `version: 1`.
 
 Read the item:
 
@@ -29,7 +29,27 @@ Read the item:
 curl -X GET "<API_URL>/items/<ITEM_ID>"
 ```
 
-Expected result: `200 OK` with the item fields.
+Expected result: `200 OK` with the item fields, including `version: 1`.
+
+Update the item:
+
+```bash
+curl -X PUT "<API_URL>/items/<ITEM_ID>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Laptop charger - spare","version":1}'
+```
+
+Expected result: `200 OK` with the updated name and `version: 2`.
+
+Repeat the update with stale version `1`:
+
+```bash
+curl -X PUT "<API_URL>/items/<ITEM_ID>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Stale update","version":1}'
+```
+
+Expected result: `409 Conflict` with `{"error":"Item version conflict"}`.
 
 Delete the item:
 
@@ -39,9 +59,17 @@ curl -X DELETE "<API_URL>/items/<ITEM_ID>"
 
 Expected result: `200 OK` with the deleted item ID.
 
+Read the deleted item:
+
+```bash
+curl -X GET "<API_URL>/items/<ITEM_ID>"
+```
+
+Expected result: `404 Not Found` with `{"error":"Item not found"}`.
+
 ## Optional Smoke Test
 
-The repository includes an optional post-deployment helper at `scripts/smoke-test.mjs`. It creates an item, reads it back, deletes it, and attempts cleanup if a later step fails.
+The repository includes an optional post-deployment helper at `scripts/smoke-test.mjs`. It creates an item, verifies the initial version, updates it, verifies the incremented version, checks that a stale update returns `409`, deletes the item, verifies a later read returns `404`, and attempts cleanup if a later step fails.
 
 Run it from the `lambdas` directory with `API_URL` set to the Terraform output:
 
@@ -58,6 +86,7 @@ Lambda handlers emit structured JSON logs. Terraform creates these Lambda log gr
 
 - `/aws/lambda/<project_name>-create`
 - `/aws/lambda/<project_name>-get`
+- `/aws/lambda/<project_name>-update`
 - `/aws/lambda/<project_name>-delete`
 
 API Gateway access logs are written to the log group exposed by Terraform:
@@ -86,12 +115,12 @@ terraform output cloudwatch_alarm_names
 
 Relevant CloudWatch signals:
 
-- Lambda `Errors` for create, get, and delete handlers.
+- Lambda `Errors` for create, get, update, and delete handlers.
 - Lambda `Throttles` for each handler.
 - API Gateway `4XXError` for validation, not-found, conflict, and other client-side responses.
 - API Gateway `5XXError` for unexpected backend failures.
 - API Gateway `Latency` for elevated request duration.
-- DynamoDB `SystemErrors` across `PutItem`, `GetItem`, and `DeleteItem`.
+- DynamoDB `SystemErrors` across `PutItem`, `GetItem`, `UpdateItem`, and `DeleteItem`.
 
 Alarm actions are optional and controlled by the Terraform `alarm_actions` variable. Without actions, alarms still exist but do not notify anyone.
 
@@ -100,28 +129,37 @@ Alarm actions are optional and controlled by the Terraform `alarm_actions` varia
 Invalid request body returns `400`:
 
 - Check that `POST /items` sends valid JSON with a non-empty `name` string of 100 characters or fewer.
+- Check that `PUT /items/{id}` sends valid JSON with a valid `name` and a positive integer `version`.
 - The handler should not call DynamoDB for validation failures.
 
 Missing item returns `404`:
 
 - Check that the path uses a valid UUID.
 - A valid UUID that is not present in DynamoDB returns `{"error":"Item not found"}`.
+- During an update, if the item is deleted after the initial read but before the conditional update completes, the handler performs a consistent follow-up read and returns `404`.
 
 Duplicate item create returns `409`:
 
 - Item creation uses a DynamoDB conditional write with `attribute_not_exists` on `id`.
 - If DynamoDB reports `ConditionalCheckFailedException`, the API returns `{"error":"Item already exists"}`.
 
+Stale update returns `409`:
+
+- Item updates require the caller to submit the current item `version`.
+- The update handler uses a DynamoDB conditional `UpdateItem` and increments the version after a successful update.
+- If the item still exists but the submitted version is stale, the API returns `{"error":"Item version conflict"}`.
+
 Unexpected DynamoDB or internal error returns safe `500`:
 
-- Callers receive a generic error such as `{"error":"Failed to create item"}`, `{"error":"Failed to fetch item"}`, or `{"error":"Failed to delete item"}`.
+- Callers receive a generic error such as `{"error":"Failed to create item"}`, `{"error":"Failed to fetch item"}`, `{"error":"Failed to update item"}`, or `{"error":"Failed to delete item"}`.
+- Update-specific `500` responses can come from the initial read, the conditional update, or the follow-up read used to distinguish stale versions from delete races.
 - Check Lambda logs for the internal `errorName` and `errorMessage`.
 - API Gateway `5XXError`, Lambda `Errors`, or DynamoDB `SystemErrors` may also show related signals.
 
 Missing Lambda environment variables:
 
 - Handlers require `TABLE_NAME`.
-- Terraform sets `TABLE_NAME` for all three Lambda functions.
+- Terraform sets `TABLE_NAME` for all four Lambda functions.
 - If it is missing or changed manually, the API returns a safe `500`; Lambda logs include the missing environment variable error.
 
 ## Cleanup And Teardown

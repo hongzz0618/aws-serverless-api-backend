@@ -35,9 +35,9 @@ Client
 
 | Component | Role in this project |
 | --- | --- |
-| API Gateway | Public HTTP entry point for `POST /items`, `GET /items/{id}`, and `DELETE /items/{id}` |
-| AWS Lambda | Runs separate TypeScript handlers for create, read, and delete operations |
-| DynamoDB | Stores item records using `id` as the partition key |
+| API Gateway | Public HTTP entry point for `POST /items`, `GET /items/{id}`, `PUT /items/{id}`, and `DELETE /items/{id}` |
+| AWS Lambda | Runs separate TypeScript handlers for create, read, update, and delete operations |
+| DynamoDB | Stores versioned item records using `id` as the partition key |
 | IAM | Allows API Gateway to invoke Lambda and scopes Lambda data access to the project DynamoDB table |
 | CloudWatch Logs | Receives structured Lambda logs and API Gateway access logs with configurable retention |
 | CloudWatch Alarms | Provides basic alarms for Lambda errors/throttles, API Gateway 4XX/5XX responses, API latency, and DynamoDB system errors |
@@ -52,6 +52,7 @@ The API is deployed to the `dev` API Gateway stage.
 | --- | --- | --- | --- |
 | `POST` | `/items` | Create an item with a generated UUID and timestamp | `201 Created` |
 | `GET` | `/items/{id}` | Fetch an item by UUID | `200 OK` |
+| `PUT` | `/items/{id}` | Update an item using version-based optimistic locking | `200 OK` |
 | `DELETE` | `/items/{id}` | Delete an item by UUID | `200 OK` |
 
 ### Validation Behavior
@@ -67,12 +68,20 @@ For `POST /items`:
 - Empty or whitespace-only names are rejected.
 - `name` must be 100 characters or fewer.
 
+For `PUT /items/{id}`:
+
+- `id` is required and must be a valid UUID.
+- Request body must be valid JSON.
+- `name` follows the same validation rules as `POST /items`.
+- `version` is required.
+- `version` must be a positive integer.
+
 For `GET /items/{id}` and `DELETE /items/{id}`:
 
 - `id` is required.
 - `id` must be a valid UUID.
 
-Invalid requests return `400` JSON error responses. Missing items return `404`.
+Invalid requests return `400` JSON error responses. Missing items return `404`. Stale update versions return `409`.
 
 ## Example Requests
 
@@ -95,7 +104,8 @@ Example response:
 ```json
 {
   "message": "Item created",
-  "id": "00000000-0000-4000-8000-000000000001"
+  "id": "00000000-0000-4000-8000-000000000001",
+  "version": 1
 }
 ```
 
@@ -103,6 +113,33 @@ Get an item:
 
 ```bash
 curl -X GET "<API_URL>/items/<ITEM_ID>"
+```
+
+Update an item:
+
+```bash
+curl -X PUT "<API_URL>/items/<ITEM_ID>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Laptop charger - spare","version":1}'
+```
+
+Example response:
+
+```json
+{
+  "id": "00000000-0000-4000-8000-000000000001",
+  "name": "Laptop charger - spare",
+  "createdAt": "2026-05-14T10:00:00.000Z",
+  "version": 2
+}
+```
+
+If another update has already changed the item version, the stale update returns `409 Conflict`:
+
+```json
+{
+  "error": "Item version conflict"
+}
 ```
 
 Delete an item:
@@ -119,6 +156,7 @@ This project includes several backend engineering practices beyond the minimum r
 - Shared utility modules for HTTP responses, environment variable handling, JSON parsing, logging, and validation
 - Zod request validation for request bodies and path parameters
 - Unit tests with Vitest for success paths, validation failures, not-found responses, and DynamoDB error handling
+- DynamoDB conditional writes for create and version-based optimistic updates
 - GitHub Actions CI for install, typecheck, tests, build, production dependency audit, Lambda packaging, Terraform formatting, and Terraform validation
 - `npm audit --omit=dev` included in CI for production dependency vulnerability checks
 - Structured JSON logging from Lambda handlers
@@ -137,7 +175,7 @@ Current state:
 - The deployed API is publicly reachable unless additional controls are added.
 - API Gateway throttling is configured to reduce accidental abuse and cost risk, but it is not a substitute for authentication or WAF protections.
 - Lambda invoke permissions are scoped to the API Gateway routes that call each function.
-- Lambda DynamoDB permissions are scoped to the project table and limited to `PutItem`, `GetItem`, and `DeleteItem`.
+- Lambda DynamoDB permissions are scoped to the project table and limited to `PutItem`, `GetItem`, `UpdateItem`, and `DeleteItem`.
 - No secrets should be committed to the repository, Terraform files, Lambda source, or local configuration.
 
 CORS and OPTIONS preflight handling are not configured in this reference implementation. The current examples assume direct API usage with tools such as curl or backend clients. Browser-based clients should add explicit CORS headers and OPTIONS routes with a specific allowed origin rather than using permissive defaults. CORS is not an authentication mechanism.
@@ -223,6 +261,7 @@ The packaging script installs dependencies, compiles the TypeScript handlers, in
 
 - `lambdas/createItem.zip`
 - `lambdas/getItem.zip`
+- `lambdas/updateItem.zip`
 - `lambdas/deleteItem.zip`
 
 Configure local Terraform variables:
@@ -252,7 +291,7 @@ Use the `api_url` output as `<API_URL>` in the example requests.
 
 ### Optional Smoke Test
 
-After deployment, the repository includes a small smoke test helper for the basic create, read, and delete flow. It calls the deployed HTTP API directly and does not require AWS credentials.
+After deployment, the repository includes a small smoke test helper for the item lifecycle. It creates an item, verifies version `1`, updates it, verifies version `2`, checks that a stale update returns `409`, deletes the item, and confirms a later read returns `404`. It calls the deployed HTTP API directly and does not require AWS credentials.
 
 Run it from the `lambdas` directory with `API_URL` set to the Terraform output value:
 
@@ -295,6 +334,7 @@ The CI workflow validates the application and infrastructure definitions, but it
 | --- | --- |
 | `lambdas/createItem.ts` | Lambda handler for `POST /items` |
 | `lambdas/getItem.ts` | Lambda handler for `GET /items/{id}` |
+| `lambdas/updateItem.ts` | Lambda handler for `PUT /items/{id}` |
 | `lambdas/deleteItem.ts` | Lambda handler for `DELETE /items/{id}` |
 | `lambdas/src/utils/` | Shared Lambda utilities |
 | `lambdas/src/validation/` | Zod request validation |
@@ -327,6 +367,8 @@ This project is intentionally limited. The main limitations are:
 - No automated smoke tests against a deployed API in CI
 - No CI/CD deployment pipeline
 - Single-table DynamoDB design is intentionally simple and only supports lookup by `id`
+- `POST /items` prevents overwrites for the generated item key, but it does not provide retry idempotency because each retry can generate a new UUID
+- Optimistic locking protects item updates from stale versions, but it is still a small single-item workflow rather than a complete domain concurrency model
 
 ## Architecture Trade-Offs
 
@@ -353,6 +395,7 @@ Lightweight ADRs capture the main design choices and trade-offs behind this proj
 - [003. Add Validation, Structured Logs, and Basic Operability Controls](docs/adr/003-operability-validation-and-observability.md)
 - [004. Evaluate Authentication and Access-Control Options](docs/adr/004-authentication-and-access-control-options.md)
 - [005. Use Conditional Writes for Item Creation](docs/adr/005-use-conditional-writes-for-item-creation.md)
+- [006. Use Optimistic Locking for Item Updates](docs/adr/006-use-optimistic-locking-for-item-updates.md)
 
 ## Architecture Discussion Notes
 
@@ -361,6 +404,7 @@ This project demonstrates:
 - Serverless API design using API Gateway, Lambda, and DynamoDB
 - Terraform infrastructure as code for a focused AWS backend reference
 - DynamoDB key-value access using `id` as the primary lookup pattern
+- DynamoDB conditional creates and conditional updates for no-overwrite and optimistic-locking behavior
 - Input validation with Zod before calling DynamoDB
 - CI quality gates for TypeScript, tests, builds, dependency audit, packaging, and Terraform validation
 - Structured JSON logging for operational debugging
@@ -372,6 +416,7 @@ Good discussion prompts:
 - How would authentication be added with Cognito or JWT authorizers?
 - Where should throttling, access logs, and alarms be configured?
 - When would DynamoDB be a good fit, and when would RDS be better?
+- How should stale updates, deleted records, and retry behavior be represented in an API contract?
 - How would the Terraform be split for multiple environments?
 - What smoke tests would be valuable after deployment?
 - How would CI evolve into safe deployment automation?

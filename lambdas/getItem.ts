@@ -47,6 +47,7 @@ export const handler = async (
     const input: GetItemCommandInput = {
       TableName: tableName,
       Key: { id: { S: id } },
+      ConsistentRead: true,
     };
 
     const result = await client.send(new GetItemCommand(input));

@@ -9,6 +9,7 @@ import {
   type GetItemCommandInput,
   UpdateItemCommand,
   type UpdateItemCommandInput,
+  type UpdateItemCommandOutput,
 } from "@aws-sdk/client-dynamodb";
 import type { Item } from "./src/types/item.js";
 import { getRequiredEnv } from "./src/utils/env.js";
@@ -68,6 +69,7 @@ export const handler = async (
     const getInput: GetItemCommandInput = {
       TableName: tableName,
       Key: { id: { S: id } },
+      ConsistentRead: true,
     };
 
     const existing = await client.send(new GetItemCommand(getInput));
@@ -117,7 +119,32 @@ export const handler = async (
       ReturnValues: "ALL_NEW",
     };
 
-    const updated = await client.send(new UpdateItemCommand(updateInput));
+    let updated: UpdateItemCommandOutput;
+
+    try {
+      updated = await client.send(new UpdateItemCommand(updateInput));
+    } catch (err) {
+      if (!isConditionalCheckFailed(err)) {
+        throw err;
+      }
+
+      const current = await client.send(new GetItemCommand(getInput));
+
+      if (!current.Item) {
+        logger.info("Item not found", {
+          statusCode: 404,
+          itemId: id,
+        });
+        return errorResponse(404, "Item not found");
+      }
+
+      logger.warn("Item version conflict", {
+        statusCode: 409,
+        itemId: id,
+      });
+      return errorResponse(409, "Item version conflict");
+    }
+
     const parsedUpdatedItem = parseStoredItem(updated.Attributes);
 
     if (!parsedUpdatedItem.ok) {
@@ -139,14 +166,6 @@ export const handler = async (
 
     return jsonResponse<Item>(200, parsedUpdatedItem.value);
   } catch (err) {
-    if (isConditionalCheckFailed(err)) {
-      logger.warn("Item version conflict", {
-        statusCode: 409,
-        itemId: idValidation.value,
-      });
-      return errorResponse(409, "Item version conflict");
-    }
-
     logger.error("Unexpected error", err, {
       statusCode: 500,
       itemId: idValidation.value,

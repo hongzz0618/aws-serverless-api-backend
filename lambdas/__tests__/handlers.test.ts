@@ -351,6 +351,21 @@ describe("getItem handler", () => {
     expectJsonResponse(result, 404, { error: "Item not found" });
   });
 
+  it("uses a consistent read", async () => {
+    dynamoMock.send.mockResolvedValueOnce({});
+    const { handler } = await import("../getItem.js");
+
+    await handler(apiEvent({ pathParameters: { id: TEST_ITEM_ID } }));
+
+    expect(dynamoMock.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({
+          ConsistentRead: true,
+        }),
+      })
+    );
+  });
+
   it("returns 200 with version when item exists", async () => {
     dynamoMock.send.mockResolvedValueOnce({
       Item: {
@@ -514,6 +529,43 @@ describe("updateItem handler", () => {
     expect(dynamoMock.send).toHaveBeenCalledTimes(2);
   });
 
+  it("uses a consistent read for the pre-read", async () => {
+    dynamoMock.send
+      .mockResolvedValueOnce({
+        Item: {
+          id: { S: TEST_ITEM_ID },
+          name: { S: "Original item" },
+          createdAt: { S: "2026-05-14T10:00:00.000Z" },
+          version: { N: "1" },
+        },
+      })
+      .mockResolvedValueOnce({
+        Attributes: {
+          id: { S: TEST_ITEM_ID },
+          name: { S: "Updated item" },
+          createdAt: { S: "2026-05-14T10:00:00.000Z" },
+          version: { N: "2" },
+        },
+      });
+    const { handler } = await import("../updateItem.js");
+
+    await handler(
+      apiEvent({
+        pathParameters: { id: TEST_ITEM_ID },
+        body: JSON.stringify({ name: "Updated item", version: 1 }),
+      })
+    );
+
+    expect(dynamoMock.send).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        input: expect.objectContaining({
+          ConsistentRead: true,
+        }),
+      })
+    );
+  });
+
   it("updates a legacy item without version when submitted version is 1", async () => {
     dynamoMock.send
       .mockResolvedValueOnce({
@@ -572,7 +624,14 @@ describe("updateItem handler", () => {
           createdAt: { S: "2026-05-14T10:00:00.000Z" },
         },
       })
-      .mockRejectedValueOnce(conflictError);
+      .mockRejectedValueOnce(conflictError)
+      .mockResolvedValueOnce({
+        Item: {
+          id: { S: TEST_ITEM_ID },
+          name: { S: "Legacy item" },
+          createdAt: { S: "2026-05-14T10:00:00.000Z" },
+        },
+      });
     const { handler } = await import("../updateItem.js");
 
     const result = await handler(
@@ -641,7 +700,43 @@ describe("updateItem handler", () => {
     expect(dynamoMock.send).toHaveBeenCalledTimes(1);
   });
 
-  it("returns a safe 409 when the item version is stale", async () => {
+  it("returns 404 when a conditional failure is followed by a missing item", async () => {
+    const internalError = "Conditional request failed after delete";
+    const conflictError = new Error(internalError);
+    conflictError.name = "ConditionalCheckFailedException";
+    dynamoMock.send
+      .mockResolvedValueOnce({
+        Item: {
+          id: { S: TEST_ITEM_ID },
+          name: { S: "Current item" },
+          createdAt: { S: "2026-05-14T10:00:00.000Z" },
+          version: { N: "1" },
+        },
+      })
+      .mockRejectedValueOnce(conflictError)
+      .mockResolvedValueOnce({});
+    const { handler } = await import("../updateItem.js");
+
+    const result = await handler(
+      apiEvent({
+        pathParameters: { id: TEST_ITEM_ID },
+        body: JSON.stringify({ name: "Updated item", version: 1 }),
+      })
+    );
+
+    expectJsonResponse(result, 404, { error: "Item not found" });
+    expect(result.body).not.toContain(internalError);
+    expect(dynamoMock.send).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        input: expect.objectContaining({
+          ConsistentRead: true,
+        }),
+      })
+    );
+  });
+
+  it("returns a safe 409 when a conditional failure is followed by an existing item", async () => {
     const internalError = "Conditional request failed for stale version";
     const conflictError = new Error(internalError);
     conflictError.name = "ConditionalCheckFailedException";
@@ -654,7 +749,15 @@ describe("updateItem handler", () => {
           version: { N: "2" },
         },
       })
-      .mockRejectedValueOnce(conflictError);
+      .mockRejectedValueOnce(conflictError)
+      .mockResolvedValueOnce({
+        Item: {
+          id: { S: TEST_ITEM_ID },
+          name: { S: "Current item" },
+          createdAt: { S: "2026-05-14T10:00:00.000Z" },
+          version: { N: "2" },
+        },
+      });
     const { handler } = await import("../updateItem.js");
 
     const result = await handler(
@@ -665,6 +768,41 @@ describe("updateItem handler", () => {
     );
 
     expectSafeErrorResponse(result, 409, "Item version conflict", internalError);
+    expect(dynamoMock.send).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        input: expect.objectContaining({
+          ConsistentRead: true,
+        }),
+      })
+    );
+  });
+
+  it("returns a safe 500 when the follow-up read after a conditional failure fails", async () => {
+    const conflictError = new Error("Conditional request failed for stale version");
+    const followUpError = "DynamoDB follow-up get failure";
+    conflictError.name = "ConditionalCheckFailedException";
+    dynamoMock.send
+      .mockResolvedValueOnce({
+        Item: {
+          id: { S: TEST_ITEM_ID },
+          name: { S: "Current item" },
+          createdAt: { S: "2026-05-14T10:00:00.000Z" },
+          version: { N: "2" },
+        },
+      })
+      .mockRejectedValueOnce(conflictError)
+      .mockRejectedValueOnce(new Error(followUpError));
+    const { handler } = await import("../updateItem.js");
+
+    const result = await handler(
+      apiEvent({
+        pathParameters: { id: TEST_ITEM_ID },
+        body: JSON.stringify({ name: "Updated item", version: 1 }),
+      })
+    );
+
+    expectSafeErrorResponse(result, 500, "Failed to update item", followUpError);
   });
 
   it("returns a safe 500 when DynamoDB read fails", async () => {

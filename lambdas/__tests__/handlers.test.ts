@@ -655,7 +655,7 @@ describe("updateItem handler", () => {
     );
   });
 
-  it("returns 400 when the request body is invalid", async () => {
+  it("returns 400 when version is missing", async () => {
     const { handler } = await import("../updateItem.js");
 
     const result = await handler(
@@ -666,6 +666,68 @@ describe("updateItem handler", () => {
     );
 
     expectJsonResponse(result, 400, { error: "Version is required" });
+    expect(dynamoMock.send).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when version is a string", async () => {
+    const { handler } = await import("../updateItem.js");
+
+    const result = await handler(
+      apiEvent({
+        pathParameters: { id: TEST_ITEM_ID },
+        body: JSON.stringify({ name: "Updated item", version: "1" }),
+      })
+    );
+
+    expectJsonResponse(result, 400, { error: "Version must be a number" });
+    expect(dynamoMock.send).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when version is zero", async () => {
+    const { handler } = await import("../updateItem.js");
+
+    const result = await handler(
+      apiEvent({
+        pathParameters: { id: TEST_ITEM_ID },
+        body: JSON.stringify({ name: "Updated item", version: 0 }),
+      })
+    );
+
+    expectJsonResponse(result, 400, {
+      error: "Version must be a positive integer",
+    });
+    expect(dynamoMock.send).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when version is negative", async () => {
+    const { handler } = await import("../updateItem.js");
+
+    const result = await handler(
+      apiEvent({
+        pathParameters: { id: TEST_ITEM_ID },
+        body: JSON.stringify({ name: "Updated item", version: -1 }),
+      })
+    );
+
+    expectJsonResponse(result, 400, {
+      error: "Version must be a positive integer",
+    });
+    expect(dynamoMock.send).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when version is not an integer", async () => {
+    const { handler } = await import("../updateItem.js");
+
+    const result = await handler(
+      apiEvent({
+        pathParameters: { id: TEST_ITEM_ID },
+        body: JSON.stringify({ name: "Updated item", version: 1.5 }),
+      })
+    );
+
+    expectJsonResponse(result, 400, {
+      error: "Version must be a positive integer",
+    });
     expect(dynamoMock.send).not.toHaveBeenCalled();
   });
 

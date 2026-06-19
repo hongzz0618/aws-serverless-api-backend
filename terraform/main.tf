@@ -274,16 +274,50 @@ resource "aws_api_gateway_deployment" "deployment" {
   rest_api_id = aws_api_gateway_rest_api.api.id
 
   triggers = {
-    redeployment = sha1(jsonencode([
-      aws_api_gateway_method.post_items.id,
-      aws_api_gateway_method.get_item.id,
-      aws_api_gateway_method.put_item.id,
-      aws_api_gateway_method.delete_item.id,
-      aws_api_gateway_integration.post_items.id,
-      aws_api_gateway_integration.get_item.id,
-      aws_api_gateway_integration.put_item.id,
-      aws_api_gateway_integration.delete_item.id
-    ]))
+    redeployment = sha1(jsonencode({
+      routes = {
+        post_items = {
+          resource_id             = aws_api_gateway_method.post_items.resource_id
+          http_method             = aws_api_gateway_method.post_items.http_method
+          authorization           = aws_api_gateway_method.post_items.authorization
+          integration_resource_id = aws_api_gateway_integration.post_items.resource_id
+          integration_http_method = aws_api_gateway_integration.post_items.integration_http_method
+          integration_method      = aws_api_gateway_integration.post_items.http_method
+          integration_type        = aws_api_gateway_integration.post_items.type
+          integration_uri         = aws_api_gateway_integration.post_items.uri
+        }
+        get_item = {
+          resource_id             = aws_api_gateway_method.get_item.resource_id
+          http_method             = aws_api_gateway_method.get_item.http_method
+          authorization           = aws_api_gateway_method.get_item.authorization
+          integration_resource_id = aws_api_gateway_integration.get_item.resource_id
+          integration_http_method = aws_api_gateway_integration.get_item.integration_http_method
+          integration_method      = aws_api_gateway_integration.get_item.http_method
+          integration_type        = aws_api_gateway_integration.get_item.type
+          integration_uri         = aws_api_gateway_integration.get_item.uri
+        }
+        put_item = {
+          resource_id             = aws_api_gateway_method.put_item.resource_id
+          http_method             = aws_api_gateway_method.put_item.http_method
+          authorization           = aws_api_gateway_method.put_item.authorization
+          integration_resource_id = aws_api_gateway_integration.put_item.resource_id
+          integration_http_method = aws_api_gateway_integration.put_item.integration_http_method
+          integration_method      = aws_api_gateway_integration.put_item.http_method
+          integration_type        = aws_api_gateway_integration.put_item.type
+          integration_uri         = aws_api_gateway_integration.put_item.uri
+        }
+        delete_item = {
+          resource_id             = aws_api_gateway_method.delete_item.resource_id
+          http_method             = aws_api_gateway_method.delete_item.http_method
+          authorization           = aws_api_gateway_method.delete_item.authorization
+          integration_resource_id = aws_api_gateway_integration.delete_item.resource_id
+          integration_http_method = aws_api_gateway_integration.delete_item.integration_http_method
+          integration_method      = aws_api_gateway_integration.delete_item.http_method
+          integration_type        = aws_api_gateway_integration.delete_item.type
+          integration_uri         = aws_api_gateway_integration.delete_item.uri
+        }
+      }
+    }))
   }
 
   depends_on = [

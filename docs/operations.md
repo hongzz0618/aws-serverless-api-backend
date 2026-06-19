@@ -115,10 +115,11 @@ terraform output cloudwatch_alarm_names
 
 Relevant CloudWatch signals:
 
-- Lambda `Errors` for create, get, update, and delete handlers.
+- Lambda `Errors` for unhandled invocation or runtime failures in the create, get, update, and delete handlers.
+- Custom handled-500 metrics for caught application failures where a handler logs `level: "error"` with `statusCode: 500` before returning a safe HTTP response.
 - Lambda `Throttles` for each handler.
 - API Gateway `4XXError` for validation, not-found, conflict, and other client-side responses.
-- API Gateway `5XXError` for unexpected backend failures.
+- API Gateway `5XXError` as the aggregate HTTP 5XX signal across all routes.
 - API Gateway `Latency` for elevated request duration.
 - DynamoDB `SystemErrors` across `PutItem`, `GetItem`, `UpdateItem`, and `DeleteItem`.
 
@@ -154,7 +155,8 @@ Unexpected DynamoDB or internal error returns safe `500`:
 - Callers receive a generic error such as `{"error":"Failed to create item"}`, `{"error":"Failed to fetch item"}`, `{"error":"Failed to update item"}`, or `{"error":"Failed to delete item"}`.
 - Update-specific `500` responses can come from the initial read, the conditional update, or the follow-up read used to distinguish stale versions from delete races.
 - Check Lambda logs for the internal `errorName` and `errorMessage`.
-- API Gateway `5XXError`, Lambda `Errors`, or DynamoDB `SystemErrors` may also show related signals.
+- Custom handled-500 metrics identify which Lambda operation returned a caught application-level `500`.
+- API Gateway `5XXError` shows the aggregate HTTP impact. Lambda `Errors` may remain unchanged for caught failures because the invocation completed successfully from the Lambda service perspective.
 
 Missing Lambda environment variables:
 

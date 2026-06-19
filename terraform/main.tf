@@ -401,11 +401,44 @@ resource "aws_lambda_permission" "apigw_delete" {
 }
 
 locals {
-  lambda_functions = {
-    create = aws_lambda_function.create_item.function_name
-    get    = aws_lambda_function.get_item.function_name
-    update = aws_lambda_function.update_item.function_name
-    delete = aws_lambda_function.delete_item.function_name
+  lambda_operations = {
+    create = {
+      function_name           = aws_lambda_function.create_item.function_name
+      log_group_name          = aws_cloudwatch_log_group.create_item.name
+      handled_500_metric_name = "CreateHandledApplication500"
+    }
+    get = {
+      function_name           = aws_lambda_function.get_item.function_name
+      log_group_name          = aws_cloudwatch_log_group.get_item.name
+      handled_500_metric_name = "GetHandledApplication500"
+    }
+    update = {
+      function_name           = aws_lambda_function.update_item.function_name
+      log_group_name          = aws_cloudwatch_log_group.update_item.name
+      handled_500_metric_name = "UpdateHandledApplication500"
+    }
+    delete = {
+      function_name           = aws_lambda_function.delete_item.function_name
+      log_group_name          = aws_cloudwatch_log_group.delete_item.name
+      handled_500_metric_name = "DeleteHandledApplication500"
+    }
+  }
+
+  lambda_functions                    = { for operation, config in local.lambda_operations : operation => config.function_name }
+  handled_application_error_namespace = "${var.project_name}/ItemsApi"
+}
+
+resource "aws_cloudwatch_log_metric_filter" "lambda_handled_500_errors" {
+  for_each = local.lambda_operations
+
+  name           = "${each.value.function_name}-handled-500"
+  log_group_name = each.value.log_group_name
+  pattern        = "{ $.level = \"error\" && $.statusCode = 500 }"
+
+  metric_transformation {
+    name      = each.value.handled_500_metric_name
+    namespace = local.handled_application_error_namespace
+    value     = "1"
   }
 }
 
@@ -427,6 +460,22 @@ resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
   dimensions = {
     FunctionName = each.value
   }
+}
+
+resource "aws_cloudwatch_metric_alarm" "lambda_handled_500_errors" {
+  for_each = var.enable_alarms ? local.lambda_operations : {}
+
+  alarm_name          = "${each.value.function_name}-handled-500"
+  alarm_description   = "Lambda handler returned one or more caught application-level HTTP 500 responses in a 5-minute period. This is separate from unhandled Lambda invocation errors."
+  namespace           = local.handled_application_error_namespace
+  metric_name         = each.value.handled_500_metric_name
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.alarm_actions
 }
 
 resource "aws_cloudwatch_metric_alarm" "lambda_throttles" {

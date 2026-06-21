@@ -11,9 +11,10 @@ import type { CreateItemResponse } from "./types/api.js";
 import type { StoredItem } from "./types/item.js";
 import { sha256Hex } from "./requestFingerprint.js";
 
-const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9_:\-.]+$/;
-const IDEMPOTENCY_KEY_MIN_LENGTH = 8;
-const IDEMPOTENCY_KEY_MAX_LENGTH = 128;
+export const IDEMPOTENCY_KEY_OPENAPI_PATTERN = "^[A-Za-z0-9._:-]{8,128}$";
+export const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9_:\-.]+$/;
+export const IDEMPOTENCY_KEY_MIN_LENGTH = 8;
+export const IDEMPOTENCY_KEY_MAX_LENGTH = 128;
 
 const STATUS_IN_PROGRESS = "IN_PROGRESS";
 const STATUS_COMPLETED = "COMPLETED";

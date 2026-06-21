@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 const apiUrl = process.env.API_URL?.trim();
 
 if (!apiUrl) {
@@ -9,6 +11,7 @@ if (!apiUrl) {
 const baseUrl = apiUrl.replace(/\/+$/, "");
 const itemName = `Smoke test item ${new Date().toISOString()}`;
 const updatedItemName = `${itemName} updated`;
+const idempotencyKey = `smoke:${randomUUID()}`;
 let createdItemId;
 
 const requestJson = async (path, options = {}) => {
@@ -70,6 +73,9 @@ try {
   console.log("[smoke] Creating item");
   const createResult = await requestJson("/items", {
     method: "POST",
+    headers: {
+      "Idempotency-Key": idempotencyKey,
+    },
     body: JSON.stringify({ name: itemName }),
   });
   assertStatus("Create item", createResult.response, 201);
@@ -79,6 +85,34 @@ try {
   assertField("Create item", "version", createResult.body.version, 1);
   createdItemId = createResult.body.id;
   console.log(`[smoke] Created item ${createdItemId}`);
+
+  console.log("[smoke] Replaying create request");
+  const replayResult = await requestJson("/items", {
+    method: "POST",
+    headers: {
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify({ name: itemName }),
+  });
+  assertStatus("Replay create item", replayResult.response, 201);
+  assertObject("Replay create item", replayResult.body);
+  assertField("Replay create item", "id", replayResult.body.id, createdItemId);
+  assertField(
+    "Replay create item",
+    "Idempotency-Replayed header",
+    replayResult.response.headers.get("idempotency-replayed"),
+    "true"
+  );
+
+  console.log("[smoke] Verifying idempotency conflict");
+  const conflictResult = await requestJson("/items", {
+    method: "POST",
+    headers: {
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify({ name: `${itemName} conflicting payload` }),
+  });
+  assertStatus("Idempotency conflict", conflictResult.response, 409);
 
   console.log("[smoke] Reading item");
   const getResult = await requestJson(`/items/${createdItemId}`);

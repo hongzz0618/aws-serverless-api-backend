@@ -44,12 +44,21 @@ vi.mock("@aws-sdk/client-dynamodb", () => {
     }
   }
 
+  class TransactWriteItemsCommand {
+    input: unknown;
+
+    constructor(input: unknown) {
+      this.input = input;
+    }
+  }
+
   return {
     DynamoDBClient,
     PutItemCommand,
     GetItemCommand,
     DeleteItemCommand,
     UpdateItemCommand,
+    TransactWriteItemsCommand,
   };
 });
 
@@ -74,6 +83,15 @@ const apiEvent = (
   resource: "",
   ...overrides,
 });
+
+const createItemEvent = (
+  overrides: Partial<APIGatewayProxyEvent> = {}
+): APIGatewayProxyEvent =>
+  apiEvent({
+    body: JSON.stringify({ name: "Example item" }),
+    headers: { "Idempotency-Key": "create-key-123" },
+    ...overrides,
+  });
 
 const responseBody = <TBody>(body: string): TBody => JSON.parse(body) as TBody;
 
@@ -150,6 +168,7 @@ beforeEach(() => {
   vi.resetModules();
   dynamoMock.send.mockReset();
   process.env.TABLE_NAME = "items-table";
+  process.env.IDEMPOTENCY_TABLE_NAME = "idempotency-table";
   vi.spyOn(console, "log").mockImplementation(() => undefined);
   vi.spyOn(console, "error").mockImplementation(() => undefined);
 });
@@ -159,10 +178,97 @@ afterEach(() => {
 });
 
 describe("createItem handler", () => {
+  it("returns 400 when Idempotency-Key is missing", async () => {
+    const { handler } = await import("../createItem.js");
+
+    const result = await handler(createItemEvent({ headers: {} }));
+
+    expectJsonResponse(result, 400, {
+      error: "Idempotency-Key header is required",
+    });
+    expect(dynamoMock.send).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when Idempotency-Key is too short", async () => {
+    const { handler } = await import("../createItem.js");
+
+    const result = await handler(
+      createItemEvent({ headers: { "Idempotency-Key": "short" } })
+    );
+
+    expectJsonResponse(result, 400, {
+      error: "Idempotency-Key header is invalid",
+    });
+    expect(dynamoMock.send).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when Idempotency-Key is too long", async () => {
+    const { handler } = await import("../createItem.js");
+
+    const result = await handler(
+      createItemEvent({ headers: { "Idempotency-Key": "a".repeat(129) } })
+    );
+
+    expectJsonResponse(result, 400, {
+      error: "Idempotency-Key header is invalid",
+    });
+    expect(dynamoMock.send).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when Idempotency-Key contains invalid characters", async () => {
+    const { handler } = await import("../createItem.js");
+
+    const result = await handler(
+      createItemEvent({ headers: { "Idempotency-Key": "bad key value" } })
+    );
+
+    expectJsonResponse(result, 400, {
+      error: "Idempotency-Key header is invalid",
+    });
+    expect(dynamoMock.send).not.toHaveBeenCalled();
+  });
+
+  it("accepts case-insensitive Idempotency-Key headers with UUID-style values", async () => {
+    dynamoMock.send.mockResolvedValueOnce({}).mockResolvedValueOnce({});
+    const { handler } = await import("../createItem.js");
+
+    const result = await handler(
+      createItemEvent({
+        headers: {
+          "idempotency-key": "00000000-0000-4000-8000-000000000001",
+        },
+      })
+    );
+
+    expectJsonResponse(result, 201, {
+      message: "Item created",
+      id: TEST_ITEM_ID,
+      version: 1,
+    });
+    expect(dynamoMock.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("accepts ULID-style Idempotency-Key values", async () => {
+    dynamoMock.send.mockResolvedValueOnce({}).mockResolvedValueOnce({});
+    const { handler } = await import("../createItem.js");
+
+    const result = await handler(
+      createItemEvent({
+        headers: { "Idempotency-Key": "01J7Y5R8P4J8Z8M9E7Q6A5B4C3" },
+      })
+    );
+
+    expectJsonResponse(result, 201, {
+      message: "Item created",
+      id: TEST_ITEM_ID,
+      version: 1,
+    });
+  });
+
   it("returns 400 when body is missing", async () => {
     const { handler } = await import("../createItem.js");
 
-    const result = await handler(apiEvent());
+    const result = await handler(createItemEvent({ body: null }));
 
     expectJsonResponse(result, 400, { error: "Request body is required" });
     expect(dynamoMock.send).not.toHaveBeenCalled();
@@ -171,7 +277,7 @@ describe("createItem handler", () => {
   it("returns 400 when JSON is invalid", async () => {
     const { handler } = await import("../createItem.js");
 
-    const result = await handler(apiEvent({ body: "{" }));
+    const result = await handler(createItemEvent({ body: "{" }));
 
     expectJsonResponse(result, 400, {
       error: "Request body must be valid JSON",
@@ -182,7 +288,7 @@ describe("createItem handler", () => {
   it("returns 400 when name is missing", async () => {
     const { handler } = await import("../createItem.js");
 
-    const result = await handler(apiEvent({ body: JSON.stringify({}) }));
+    const result = await handler(createItemEvent({ body: JSON.stringify({}) }));
 
     expectJsonResponse(result, 400, { error: "Name is required" });
     expect(dynamoMock.send).not.toHaveBeenCalled();
@@ -191,7 +297,7 @@ describe("createItem handler", () => {
   it("returns 400 when name is not a string", async () => {
     const { handler } = await import("../createItem.js");
 
-    const result = await handler(apiEvent({ body: JSON.stringify({ name: 123 }) }));
+    const result = await handler(createItemEvent({ body: JSON.stringify({ name: 123 }) }));
 
     expectJsonResponse(result, 400, { error: "Name must be a string" });
     expect(dynamoMock.send).not.toHaveBeenCalled();
@@ -200,7 +306,7 @@ describe("createItem handler", () => {
   it("returns 400 when name contains only spaces", async () => {
     const { handler } = await import("../createItem.js");
 
-    const result = await handler(apiEvent({ body: JSON.stringify({ name: "   " }) }));
+    const result = await handler(createItemEvent({ body: JSON.stringify({ name: "   " }) }));
 
     expectJsonResponse(result, 400, { error: "Name cannot be empty" });
     expect(dynamoMock.send).not.toHaveBeenCalled();
@@ -210,7 +316,7 @@ describe("createItem handler", () => {
     const { handler } = await import("../createItem.js");
 
     const result = await handler(
-      apiEvent({ body: JSON.stringify({ name: "a".repeat(101) }) })
+      createItemEvent({ body: JSON.stringify({ name: "a".repeat(101) }) })
     );
 
     expectJsonResponse(result, 400, {
@@ -220,11 +326,11 @@ describe("createItem handler", () => {
   });
 
   it("returns 201 when item is created successfully", async () => {
-    dynamoMock.send.mockResolvedValueOnce({});
+    dynamoMock.send.mockResolvedValueOnce({}).mockResolvedValueOnce({});
     const { handler } = await import("../createItem.js");
 
     const result = await handler(
-      apiEvent({ body: JSON.stringify({ name: " Example item " }) })
+      createItemEvent({ body: JSON.stringify({ name: " Example item " }) })
     );
 
     expectJsonResponse(result, 201, {
@@ -232,24 +338,51 @@ describe("createItem handler", () => {
       id: TEST_ITEM_ID,
       version: 1,
     });
-    expect(dynamoMock.send).toHaveBeenCalledTimes(1);
-    expect(dynamoMock.send).toHaveBeenCalledWith(
+    expect(dynamoMock.send).toHaveBeenCalledTimes(2);
+    expect(dynamoMock.send).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({
         input: expect.objectContaining({
+          TableName: "idempotency-table",
+          ConditionExpression: expect.stringContaining("attribute_not_exists"),
           Item: expect.objectContaining({
-            version: { N: "1" },
+            status: { S: "IN_PROGRESS" },
           }),
+        }),
+      })
+    );
+    expect(dynamoMock.send).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        input: expect.objectContaining({
+          TransactItems: expect.arrayContaining([
+            expect.objectContaining({
+              Put: expect.objectContaining({
+                TableName: "items-table",
+                Item: expect.objectContaining({
+                  name: { S: "Example item" },
+                  version: { N: "1" },
+                }),
+              }),
+            }),
+            expect.objectContaining({
+              Update: expect.objectContaining({
+                TableName: "idempotency-table",
+                UpdateExpression: expect.stringContaining("#responseBody"),
+              }),
+            }),
+          ]),
         }),
       })
     );
   });
 
   it("logs structured request metadata when context is available", async () => {
-    dynamoMock.send.mockResolvedValueOnce({});
+    dynamoMock.send.mockResolvedValueOnce({}).mockResolvedValueOnce({});
     const { handler } = await import("../createItem.js");
 
     await handler(
-      apiEvent({ body: JSON.stringify({ name: "Example item" }) }),
+      createItemEvent({ body: JSON.stringify({ name: "Example item" }) }),
       { awsRequestId: "request-123" } as Context
     );
 
@@ -265,12 +398,99 @@ describe("createItem handler", () => {
         }),
         expect.objectContaining({
           level: "info",
+          message: "Idempotency key reserved",
+          event: "idempotency_reserved",
+          idempotencyKeyHash: expect.any(String),
+        }),
+        expect.objectContaining({
+          level: "info",
           message: "Item created",
           itemId: TEST_ITEM_ID,
           statusCode: 201,
+          idempotencyKeyHash: expect.any(String),
         }),
       ])
     );
+  });
+
+  it("returns the original success response for an exact completed replay", async () => {
+    const conditionalError = new Error("reservation exists");
+    conditionalError.name = "ConditionalCheckFailedException";
+    dynamoMock.send
+      .mockRejectedValueOnce(conditionalError)
+      .mockResolvedValueOnce({
+        Item: {
+          requestFingerprint: {
+            S: "fc5d1045c1183e0903b3823b77393778261920349610a2754d05cb5f43cc2124",
+          },
+          status: { S: "COMPLETED" },
+          responseBody: {
+            S: JSON.stringify({
+              message: "Item created",
+              id: TEST_ITEM_ID,
+              version: 1,
+            }),
+          },
+        },
+      });
+    const { handler } = await import("../createItem.js");
+
+    const result = await handler(createItemEvent());
+
+    expect(result.statusCode).toBe(201);
+    expect(result.headers).toEqual({
+      "Content-Type": "application/json",
+      "Idempotency-Replayed": "true",
+    });
+    expect(responseBody(result.body)).toEqual({
+      message: "Item created",
+      id: TEST_ITEM_ID,
+      version: 1,
+    });
+    expect(dynamoMock.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns 409 when the same Idempotency-Key is reused with a different payload", async () => {
+    const conditionalError = new Error("reservation exists");
+    conditionalError.name = "ConditionalCheckFailedException";
+    dynamoMock.send.mockRejectedValueOnce(conditionalError).mockResolvedValueOnce({
+      Item: {
+        requestFingerprint: { S: "different-fingerprint" },
+        status: { S: "COMPLETED" },
+      },
+    });
+    const { handler } = await import("../createItem.js");
+
+    const result = await handler(createItemEvent());
+
+    expectJsonResponse(result, 409, {
+      error: "Idempotency key was already used with a different request",
+    });
+    expect(result.body).not.toContain("different-fingerprint");
+    expect(dynamoMock.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns 409 when the same Idempotency-Key is already in progress", async () => {
+    const conditionalError = new Error("reservation exists");
+    conditionalError.name = "ConditionalCheckFailedException";
+    dynamoMock.send
+      .mockRejectedValueOnce(conditionalError)
+      .mockResolvedValueOnce({
+        Item: {
+          requestFingerprint: {
+            S: "fc5d1045c1183e0903b3823b77393778261920349610a2754d05cb5f43cc2124",
+          },
+          status: { S: "IN_PROGRESS" },
+        },
+      });
+    const { handler } = await import("../createItem.js");
+
+    const result = await handler(createItemEvent());
+
+    expectJsonResponse(result, 409, {
+      error: "Request with this idempotency key is already in progress",
+    });
+    expect(dynamoMock.send).toHaveBeenCalledTimes(2);
   });
 
   it("returns a safe 500 when DynamoDB fails", async () => {
@@ -278,7 +498,7 @@ describe("createItem handler", () => {
     dynamoMock.send.mockRejectedValueOnce(new Error(internalError));
     const { handler } = await import("../createItem.js");
 
-    const result = await handler(apiEvent({ body: JSON.stringify({ name: "Item" }) }));
+    const result = await handler(createItemEvent({ body: JSON.stringify({ name: "Item" }) }));
 
     expectSafeErrorResponse(result, 500, "Failed to create item", internalError);
   });
@@ -286,13 +506,45 @@ describe("createItem handler", () => {
   it("returns a safe 409 when the item id already exists", async () => {
     const internalError = "Conditional request failed for existing item";
     const duplicateError = new Error(internalError);
-    duplicateError.name = "ConditionalCheckFailedException";
-    dynamoMock.send.mockRejectedValueOnce(duplicateError);
+    duplicateError.name = "TransactionCanceledException";
+    (
+      duplicateError as Error & {
+        CancellationReasons: Array<{ Code: string }>;
+      }
+    ).CancellationReasons = [{ Code: "ConditionalCheckFailed" }];
+    dynamoMock.send
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(duplicateError)
+      .mockResolvedValueOnce({});
     const { handler } = await import("../createItem.js");
 
-    const result = await handler(apiEvent({ body: JSON.stringify({ name: "Item" }) }));
+    const result = await handler(createItemEvent({ body: JSON.stringify({ name: "Item" }) }));
 
     expectSafeErrorResponse(result, 409, "Item already exists", internalError);
+    expect(dynamoMock.send).toHaveBeenCalledTimes(3);
+  });
+
+  it("releases the reservation and returns a safe 500 when item creation fails", async () => {
+    const internalError = "Transact write failed";
+    dynamoMock.send
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(new Error(internalError))
+      .mockResolvedValueOnce({});
+    const { handler } = await import("../createItem.js");
+
+    const result = await handler(createItemEvent({ body: JSON.stringify({ name: "Item" }) }));
+
+    expectSafeErrorResponse(result, 500, "Failed to create item", internalError);
+    expect(dynamoMock.send).toHaveBeenCalledTimes(3);
+    expect(dynamoMock.send).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        input: expect.objectContaining({
+          TableName: "idempotency-table",
+          ConditionExpression: expect.stringContaining("#requestFingerprint"),
+        }),
+      })
+    );
   });
 
   it("returns a safe 500 and logs metadata when TABLE_NAME is missing", async () => {
@@ -301,7 +553,7 @@ describe("createItem handler", () => {
     const { handler } = await import("../createItem.js");
 
     const result = await handler(
-      apiEvent({ body: JSON.stringify({ name: sensitiveBodyValue }) }),
+      createItemEvent({ body: JSON.stringify({ name: sensitiveBodyValue }) }),
       { awsRequestId: "request-missing-create-table" } as Context
     );
 
@@ -318,6 +570,24 @@ describe("createItem handler", () => {
       route: "POST /items",
       sensitiveBodyValue,
     });
+  });
+
+  it("returns a safe 500 and logs metadata when IDEMPOTENCY_TABLE_NAME is missing", async () => {
+    delete process.env.IDEMPOTENCY_TABLE_NAME;
+    const { handler } = await import("../createItem.js");
+
+    const result = await handler(
+      createItemEvent({ body: JSON.stringify({ name: "Config test item" }) }),
+      { awsRequestId: "request-missing-idempotency-table" } as Context
+    );
+
+    expectSafeErrorResponse(
+      result,
+      500,
+      "Failed to create item",
+      "Missing required environment variable: IDEMPOTENCY_TABLE_NAME"
+    );
+    expect(dynamoMock.send).not.toHaveBeenCalled();
   });
 });
 

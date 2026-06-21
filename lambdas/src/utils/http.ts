@@ -7,10 +7,14 @@ const jsonHeaders = {
 
 export const jsonResponse = <TBody>(
   statusCode: number,
-  body: TBody
+  body: TBody,
+  headers: Record<string, string> = {}
 ): APIGatewayProxyResult => ({
   statusCode,
-  headers: jsonHeaders,
+  headers: {
+    ...jsonHeaders,
+    ...headers,
+  },
   body: JSON.stringify(body),
 });
 

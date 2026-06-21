@@ -5,13 +5,23 @@ import type {
 } from "aws-lambda";
 import {
   DynamoDBClient,
-  PutItemCommand,
-  type PutItemCommandInput,
 } from "@aws-sdk/client-dynamodb";
 import { v4 as uuidv4 } from "uuid";
 import type { CreateItemResponse } from "./src/types/api.js";
 import type { StoredItem } from "./src/types/item.js";
+import {
+  completeIdempotentCreate,
+  isItemTransactionConflict,
+  releaseIdempotencyReservation,
+  reserveIdempotencyRecord,
+  validateIdempotencyKey,
+} from "./src/idempotency.js";
+import {
+  createItemRequestFingerprint,
+  idempotencyKeyCorrelation,
+} from "./src/requestFingerprint.js";
 import { getRequiredEnv } from "./src/utils/env.js";
+import { getHeaderValue } from "./src/utils/headers.js";
 import { errorResponse, jsonResponse } from "./src/utils/http.js";
 import { createLogger } from "./src/utils/logger.js";
 import { validateCreateItemBody } from "./src/validation/item.js";
@@ -19,9 +29,7 @@ import { validateCreateItemBody } from "./src/validation/item.js";
 const client = new DynamoDBClient();
 const route = "POST /items";
 const operation = "createItem";
-
-const isConditionalCheckFailed = (err: unknown): boolean =>
-  err instanceof Error && err.name === "ConditionalCheckFailedException";
+const idempotencyKeyHeader = "Idempotency-Key";
 
 export const handler = async (
   event: APIGatewayProxyEvent,
@@ -36,6 +44,18 @@ export const handler = async (
 
   logger.info("Request received");
 
+  const idempotencyKeyValidation = validateIdempotencyKey(
+    getHeaderValue(event.headers, idempotencyKeyHeader)
+  );
+
+  if (!idempotencyKeyValidation.ok) {
+    logger.warn("Validation failed", {
+      statusCode: 400,
+      validationError: idempotencyKeyValidation.error,
+    });
+    return errorResponse(400, idempotencyKeyValidation.error);
+  }
+
   const validation = validateCreateItemBody(event.body);
 
   if (!validation.ok) {
@@ -48,6 +68,72 @@ export const handler = async (
 
   try {
     const tableName = getRequiredEnv("TABLE_NAME");
+    const idempotencyTableName = getRequiredEnv("IDEMPOTENCY_TABLE_NAME");
+    const idempotencyKey = idempotencyKeyValidation.value;
+    const requestFingerprint = createItemRequestFingerprint(validation.value);
+    const keyCorrelation = idempotencyKeyCorrelation(idempotencyKey);
+    const reservation = await reserveIdempotencyRecord({
+      client,
+      tableName: idempotencyTableName,
+      key: idempotencyKey,
+      requestFingerprint,
+      keyCorrelation,
+    });
+
+    if (reservation.status === "replayed") {
+      logger.info("Idempotent create replayed", {
+        event: "idempotency_replayed",
+        statusCode: 201,
+        itemId: reservation.response.id,
+        idempotencyKeyHash: keyCorrelation,
+      });
+      return jsonResponse<CreateItemResponse>(201, reservation.response, {
+        "Idempotency-Replayed": "true",
+      });
+    }
+
+    if (reservation.status === "conflict") {
+      logger.warn("Idempotency key conflict", {
+        event: "idempotency_conflict",
+        statusCode: 409,
+        idempotencyKeyHash: keyCorrelation,
+      });
+      return errorResponse(
+        409,
+        "Idempotency key was already used with a different request"
+      );
+    }
+
+    if (reservation.status === "in_progress") {
+      logger.warn("Idempotent create already in progress", {
+        event: "idempotency_in_progress",
+        statusCode: 409,
+        idempotencyKeyHash: keyCorrelation,
+      });
+      return errorResponse(
+        409,
+        "Request with this idempotency key is already in progress"
+      );
+    }
+
+    if (reservation.status === "invalid_record") {
+      logger.error(
+        "Idempotency record has invalid shape",
+        new Error("Invalid idempotency record"),
+        {
+          event: "idempotency_failed",
+          statusCode: 500,
+          idempotencyKeyHash: keyCorrelation,
+        }
+      );
+      return errorResponse(500, "Failed to create item");
+    }
+
+    logger.info("Idempotency key reserved", {
+      event: "idempotency_reserved",
+      idempotencyKeyHash: keyCorrelation,
+    });
+
     const id = uuidv4();
     const item: StoredItem = {
       id: { S: id },
@@ -55,37 +141,61 @@ export const handler = async (
       createdAt: { S: new Date().toISOString() },
       version: { N: "1" },
     };
-    const input: PutItemCommandInput = {
-      TableName: tableName,
-      Item: item,
-      ConditionExpression: "attribute_not_exists(#id)",
-      ExpressionAttributeNames: {
-        "#id": "id",
-      },
+    const response: CreateItemResponse = {
+      message: "Item created",
+      id,
+      version: 1,
     };
 
-    await client.send(new PutItemCommand(input));
+    try {
+      await completeIdempotentCreate({
+        client,
+        idempotencyTableName,
+        itemsTableName: tableName,
+        key: idempotencyKey,
+        requestFingerprint,
+        item,
+        response,
+      });
+    } catch (err) {
+      await releaseIdempotencyReservation({
+        client,
+        tableName: idempotencyTableName,
+        key: idempotencyKey,
+        requestFingerprint,
+      }).catch((cleanupErr: unknown) => {
+        logger.error("Failed to release idempotency reservation", cleanupErr, {
+          event: "idempotency_failed",
+          statusCode: 500,
+          idempotencyKeyHash: keyCorrelation,
+        });
+      });
+
+      if (isItemTransactionConflict(err)) {
+        logger.warn("Item already exists", {
+          statusCode: 409,
+          idempotencyKeyHash: keyCorrelation,
+        });
+        return errorResponse(409, "Item already exists");
+      }
+
+      throw err;
+    }
 
     logger.info("Item created", {
       statusCode: 201,
       itemId: id,
+      idempotencyKeyHash: keyCorrelation,
     });
 
-    return jsonResponse<CreateItemResponse>(201, {
-      message: "Item created",
-      id,
-      version: 1,
-    });
+    return jsonResponse<CreateItemResponse>(201, response);
   } catch (err) {
-    if (isConditionalCheckFailed(err)) {
-      logger.warn("Item already exists", {
-        statusCode: 409,
-      });
-      return errorResponse(409, "Item already exists");
-    }
-
     logger.error("Unexpected error", err, {
+      event: "idempotency_failed",
       statusCode: 500,
+      idempotencyKeyHash: idempotencyKeyValidation.ok
+        ? idempotencyKeyCorrelation(idempotencyKeyValidation.value)
+        : undefined,
     });
     return errorResponse(500, "Failed to create item");
   }

@@ -55,6 +55,27 @@ The API is deployed to the `dev` API Gateway stage.
 | `PUT` | `/items/{id}` | Update an item using version-based optimistic locking | `200 OK` |
 | `DELETE` | `/items/{id}` | Delete an item by UUID | `200 OK` |
 
+## API Contract
+
+The OpenAPI contract lives at `openapi/openapi.yaml` and describes the currently implemented API Gateway routes and Lambda handler behavior. It uses OpenAPI 3.0.3 for broad validator compatibility and stable JSON Schema handling.
+
+The contract covers the four implemented routes, JSON request and response bodies, validation errors, idempotent create semantics, replay headers, and optimistic locking/version-conflict behavior. It intentionally does not define authentication, CORS, OPTIONS routes, generated SDKs, or endpoints that are not present in Terraform.
+
+OpenAPI is a human-readable and CI-validated contract in this repository. API Gateway deployment is still defined by Terraform; the OpenAPI file is not imported by API Gateway and is not a deployment source of truth.
+
+### Contract Validation
+
+Run contract checks locally from `lambdas/`:
+
+```bash
+npm run contract:validate
+npm run test:contract
+```
+
+`contract:validate` parses and validates the OpenAPI file, resolves `$ref` values, checks unique operation IDs, compares OpenAPI method/path pairs with the Terraform API Gateway methods, verifies key request/response contract details, and confirms CI runs the contract checks. `test:contract` exercises representative handler responses and validates them against the OpenAPI response schemas.
+
+These checks do not require AWS credentials, a deployed API, or network access after dependencies are installed. Live AWS behavior still requires the optional post-deployment smoke test with an explicit `API_URL`.
+
 ### Validation Behavior
 
 Request validation is implemented in the Lambda application layer with Zod.

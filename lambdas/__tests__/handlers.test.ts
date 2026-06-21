@@ -645,6 +645,9 @@ describe("createItem handler", () => {
         }),
       })
     );
+    expect(
+      errorLoggedJson().filter((entry) => entry.event === "idempotency_failed")
+    ).toHaveLength(1);
   });
 
   it("returns a safe 500 and logs metadata when TABLE_NAME is missing", async () => {

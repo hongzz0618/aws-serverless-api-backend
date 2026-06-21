@@ -206,7 +206,7 @@ export const handler = async (
         statusCode: 500,
         idempotencyKeyHash: keyCorrelation,
       });
-      throw err;
+      return errorResponse(500, "Failed to create item");
     }
 
     logger.info("Item created", {

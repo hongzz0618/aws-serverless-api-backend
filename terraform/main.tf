@@ -15,6 +15,26 @@ resource "aws_dynamodb_table" "items" {
   }
 }
 
+resource "aws_dynamodb_table" "idempotency" {
+  name         = "${var.project_name}-idempotency"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "idempotencyKey"
+
+  attribute {
+    name = "idempotencyKey"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "expiresAt"
+    enabled        = true
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+}
+
 # IAM Role for Lambda
 resource "aws_iam_role" "lambda_exec" {
   name = "${var.project_name}-lambda-role"
@@ -40,16 +60,29 @@ resource "aws_iam_role_policy" "lambda_dynamodb_items" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "dynamodb:PutItem",
-        "dynamodb:GetItem",
-        "dynamodb:UpdateItem",
-        "dynamodb:DeleteItem"
-      ]
-      Resource = aws_dynamodb_table.items.arn
-    }]
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:PutItem",
+          "dynamodb:GetItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:TransactWriteItems"
+        ]
+        Resource = aws_dynamodb_table.items.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:PutItem",
+          "dynamodb:GetItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:TransactWriteItems"
+        ]
+        Resource = aws_dynamodb_table.idempotency.arn
+      }
+    ]
   })
 }
 
@@ -72,7 +105,8 @@ resource "aws_lambda_function" "create_item" {
 
   environment {
     variables = {
-      TABLE_NAME = aws_dynamodb_table.items.name
+      TABLE_NAME             = aws_dynamodb_table.items.name
+      IDEMPOTENCY_TABLE_NAME = aws_dynamodb_table.idempotency.name
     }
   }
 
@@ -426,6 +460,20 @@ locals {
 
   lambda_functions                    = { for operation, config in local.lambda_operations : operation => config.function_name }
   handled_application_error_namespace = "${var.project_name}/ItemsApi"
+  idempotency_metric_filters = {
+    replayed = {
+      event       = "idempotency_replayed"
+      metric_name = "CreateIdempotencyReplayCount"
+    }
+    conflict = {
+      event       = "idempotency_conflict"
+      metric_name = "CreateIdempotencyConflictCount"
+    }
+    failed = {
+      event       = "idempotency_failed"
+      metric_name = "CreateIdempotencyFailureCount"
+    }
+  }
 }
 
 resource "aws_cloudwatch_log_metric_filter" "lambda_handled_500_errors" {
@@ -437,6 +485,20 @@ resource "aws_cloudwatch_log_metric_filter" "lambda_handled_500_errors" {
 
   metric_transformation {
     name      = each.value.handled_500_metric_name
+    namespace = local.handled_application_error_namespace
+    value     = "1"
+  }
+}
+
+resource "aws_cloudwatch_log_metric_filter" "create_idempotency_events" {
+  for_each = local.idempotency_metric_filters
+
+  name           = "${aws_lambda_function.create_item.function_name}-${each.key}"
+  log_group_name = aws_cloudwatch_log_group.create_item.name
+  pattern        = "{ $.event = \"${each.value.event}\" }"
+
+  metric_transformation {
+    name      = each.value.metric_name
     namespace = local.handled_application_error_namespace
     value     = "1"
   }

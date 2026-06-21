@@ -3,14 +3,13 @@ import type {
   APIGatewayProxyResult,
   Context,
 } from "aws-lambda";
-import {
-  DynamoDBClient,
-} from "@aws-sdk/client-dynamodb";
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { v4 as uuidv4 } from "uuid";
 import type { CreateItemResponse } from "./src/types/api.js";
 import type { StoredItem } from "./src/types/item.js";
 import {
   completeIdempotentCreate,
+  inspectIdempotencyRecord,
   isItemTransactionConflict,
   releaseIdempotencyReservation,
   reserveIdempotencyRecord,
@@ -72,12 +71,14 @@ export const handler = async (
     const idempotencyKey = idempotencyKeyValidation.value;
     const requestFingerprint = createItemRequestFingerprint(validation.value);
     const keyCorrelation = idempotencyKeyCorrelation(idempotencyKey);
+    const candidateItemId = uuidv4();
     const reservation = await reserveIdempotencyRecord({
       client,
       tableName: idempotencyTableName,
       key: idempotencyKey,
       requestFingerprint,
       keyCorrelation,
+      itemId: candidateItemId,
     });
 
     if (reservation.status === "replayed") {
@@ -132,9 +133,10 @@ export const handler = async (
     logger.info("Idempotency key reserved", {
       event: "idempotency_reserved",
       idempotencyKeyHash: keyCorrelation,
+      recovered: reservation.recovered,
     });
 
-    const id = uuidv4();
+    const id = reservation.itemId;
     const item: StoredItem = {
       id: { S: id },
       name: { S: validation.value.name },
@@ -158,20 +160,21 @@ export const handler = async (
         response,
       });
     } catch (err) {
-      await releaseIdempotencyReservation({
-        client,
-        tableName: idempotencyTableName,
-        key: idempotencyKey,
-        requestFingerprint,
-      }).catch((cleanupErr: unknown) => {
-        logger.error("Failed to release idempotency reservation", cleanupErr, {
-          event: "idempotency_failed",
-          statusCode: 500,
-          idempotencyKeyHash: keyCorrelation,
-        });
-      });
-
       if (isItemTransactionConflict(err)) {
+        await releaseIdempotencyReservation({
+          client,
+          tableName: idempotencyTableName,
+          key: idempotencyKey,
+          requestFingerprint,
+          itemId: id,
+        }).catch((cleanupErr: unknown) => {
+          logger.error("Failed to release idempotency reservation", cleanupErr, {
+            event: "idempotency_failed",
+            statusCode: 500,
+            idempotencyKeyHash: keyCorrelation,
+          });
+        });
+
         logger.warn("Item already exists", {
           statusCode: 409,
           idempotencyKeyHash: keyCorrelation,
@@ -179,6 +182,30 @@ export const handler = async (
         return errorResponse(409, "Item already exists");
       }
 
+      const inspection = await inspectIdempotencyRecord({
+        client,
+        tableName: idempotencyTableName,
+        key: idempotencyKey,
+        requestFingerprint,
+      });
+
+      if (inspection.status === "completed") {
+        logger.info("Idempotent create completed after retry ambiguity", {
+          event: "idempotency_replayed",
+          statusCode: 201,
+          itemId: inspection.response.id,
+          idempotencyKeyHash: keyCorrelation,
+        });
+        return jsonResponse<CreateItemResponse>(201, inspection.response, {
+          "Idempotency-Replayed": "true",
+        });
+      }
+
+      logger.error("Idempotent create completion outcome unresolved", err, {
+        event: "idempotency_failed",
+        statusCode: 500,
+        idempotencyKeyHash: keyCorrelation,
+      });
       throw err;
     }
 

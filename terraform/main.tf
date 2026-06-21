@@ -77,6 +77,7 @@ resource "aws_iam_role_policy" "lambda_dynamodb_items" {
         Action = [
           "dynamodb:PutItem",
           "dynamodb:GetItem",
+          "dynamodb:UpdateItem",
           "dynamodb:DeleteItem",
           "dynamodb:TransactWriteItems"
         ]
@@ -495,7 +496,7 @@ resource "aws_cloudwatch_log_metric_filter" "create_idempotency_events" {
 
   name           = "${aws_lambda_function.create_item.function_name}-${each.key}"
   log_group_name = aws_cloudwatch_log_group.create_item.name
-  pattern        = "{ $.event = \"${each.value.event}\" }"
+  pattern        = "\"${each.value.event}\""
 
   metric_transformation {
     name      = each.value.metric_name

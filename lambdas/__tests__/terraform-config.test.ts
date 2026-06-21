@@ -42,6 +42,8 @@ describe("terraform idempotency configuration", () => {
     expect(main).toMatch(/event\s*=\s*"idempotency_replayed"/);
     expect(main).toMatch(/event\s*=\s*"idempotency_conflict"/);
     expect(main).toMatch(/event\s*=\s*"idempotency_failed"/);
+    expect(main).toContain('pattern        = "\\"${each.value.event}\\""');
+    expect(main).not.toContain('$.event = "${each.value.event}"');
     expect(outputs).not.toContain("idempotency_replayed");
   });
 });

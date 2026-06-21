@@ -355,6 +355,7 @@ describe("createItem handler", () => {
       2,
       expect.objectContaining({
         input: expect.objectContaining({
+          ClientRequestToken: expect.stringMatching(/^[a-f0-9]{36}$/),
           TransactItems: expect.arrayContaining([
             expect.objectContaining({
               Put: expect.objectContaining({
@@ -424,6 +425,8 @@ describe("createItem handler", () => {
             S: "fc5d1045c1183e0903b3823b77393778261920349610a2754d05cb5f43cc2124",
           },
           status: { S: "COMPLETED" },
+          itemId: { S: TEST_ITEM_ID },
+          responseStatusCode: { N: "201" },
           responseBody: {
             S: JSON.stringify({
               message: "Item created",
@@ -447,6 +450,21 @@ describe("createItem handler", () => {
       id: TEST_ITEM_ID,
       version: 1,
     });
+    expect(loggedJson()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "idempotency_replayed",
+          statusCode: 201,
+        }),
+      ])
+    );
+    expect(errorLoggedJson()).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "idempotency_failed",
+        }),
+      ])
+    );
     expect(dynamoMock.send).toHaveBeenCalledTimes(2);
   });
 
@@ -467,6 +485,21 @@ describe("createItem handler", () => {
       error: "Idempotency key was already used with a different request",
     });
     expect(result.body).not.toContain("different-fingerprint");
+    expect(loggedJson()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "idempotency_conflict",
+          statusCode: 409,
+        }),
+      ])
+    );
+    expect(errorLoggedJson()).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "idempotency_failed",
+        }),
+      ])
+    );
     expect(dynamoMock.send).toHaveBeenCalledTimes(2);
   });
 
@@ -481,6 +514,8 @@ describe("createItem handler", () => {
             S: "fc5d1045c1183e0903b3823b77393778261920349610a2754d05cb5f43cc2124",
           },
           status: { S: "IN_PROGRESS" },
+          itemId: { S: TEST_ITEM_ID },
+          inProgressExpiresAt: { N: "9999999999" },
         },
       });
     const { handler } = await import("../createItem.js");
@@ -498,7 +533,7 @@ describe("createItem handler", () => {
     dynamoMock.send.mockRejectedValueOnce(new Error(internalError));
     const { handler } = await import("../createItem.js");
 
-    const result = await handler(createItemEvent({ body: JSON.stringify({ name: "Item" }) }));
+    const result = await handler(createItemEvent());
 
     expectSafeErrorResponse(result, 500, "Failed to create item", internalError);
   });
@@ -518,30 +553,95 @@ describe("createItem handler", () => {
       .mockResolvedValueOnce({});
     const { handler } = await import("../createItem.js");
 
-    const result = await handler(createItemEvent({ body: JSON.stringify({ name: "Item" }) }));
+    const result = await handler(createItemEvent());
 
     expectSafeErrorResponse(result, 409, "Item already exists", internalError);
-    expect(dynamoMock.send).toHaveBeenCalledTimes(3);
-  });
-
-  it("releases the reservation and returns a safe 500 when item creation fails", async () => {
-    const internalError = "Transact write failed";
-    dynamoMock.send
-      .mockResolvedValueOnce({})
-      .mockRejectedValueOnce(new Error(internalError))
-      .mockResolvedValueOnce({});
-    const { handler } = await import("../createItem.js");
-
-    const result = await handler(createItemEvent({ body: JSON.stringify({ name: "Item" }) }));
-
-    expectSafeErrorResponse(result, 500, "Failed to create item", internalError);
     expect(dynamoMock.send).toHaveBeenCalledTimes(3);
     expect(dynamoMock.send).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({
         input: expect.objectContaining({
-          TableName: "idempotency-table",
-          ConditionExpression: expect.stringContaining("#requestFingerprint"),
+          ConditionExpression: expect.stringContaining("#itemId"),
+          ExpressionAttributeValues: expect.objectContaining({
+            ":itemId": { S: TEST_ITEM_ID },
+          }),
+        }),
+      })
+    );
+  });
+
+  it("returns the stored response when a transaction outcome is ambiguous but completed", async () => {
+    const internalError = "Transact write failed";
+    dynamoMock.send
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(new Error(internalError))
+      .mockResolvedValueOnce({
+        Item: {
+          requestFingerprint: {
+            S: "fc5d1045c1183e0903b3823b77393778261920349610a2754d05cb5f43cc2124",
+          },
+          status: { S: "COMPLETED" },
+          itemId: { S: TEST_ITEM_ID },
+          responseStatusCode: { N: "201" },
+          responseBody: {
+            S: JSON.stringify({
+              message: "Item created",
+              id: TEST_ITEM_ID,
+              version: 1,
+            }),
+          },
+        },
+      });
+    const { handler } = await import("../createItem.js");
+
+    const result = await handler(createItemEvent());
+
+    expect(result.statusCode).toBe(201);
+    expect(result.headers).toEqual({
+      "Content-Type": "application/json",
+      "Idempotency-Replayed": "true",
+    });
+    expect(responseBody(result.body)).toEqual({
+      message: "Item created",
+      id: TEST_ITEM_ID,
+      version: 1,
+    });
+    expect(dynamoMock.send).toHaveBeenCalledTimes(3);
+    expect(dynamoMock.send).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        input: expect.objectContaining({
+          ConsistentRead: true,
+        }),
+      })
+    );
+  });
+
+  it("does not delete the reservation when a transaction outcome remains ambiguous", async () => {
+    const internalError = "network timeout";
+    dynamoMock.send
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(new Error(internalError))
+      .mockResolvedValueOnce({
+        Item: {
+          requestFingerprint: {
+            S: "fc5d1045c1183e0903b3823b77393778261920349610a2754d05cb5f43cc2124",
+          },
+          status: { S: "IN_PROGRESS" },
+          itemId: { S: TEST_ITEM_ID },
+          inProgressExpiresAt: { N: "9999999999" },
+        },
+      });
+    const { handler } = await import("../createItem.js");
+
+    const result = await handler(createItemEvent());
+
+    expectSafeErrorResponse(result, 500, "Failed to create item", internalError);
+    expect(dynamoMock.send).toHaveBeenCalledTimes(3);
+    expect(dynamoMock.send).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({
+          ConditionExpression: expect.stringContaining("#itemId"),
         }),
       })
     );

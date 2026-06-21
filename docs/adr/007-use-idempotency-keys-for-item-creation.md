@@ -45,13 +45,14 @@ The table uses `idempotencyKey` as the partition key and stores:
 - saved response body
 - safe key correlation hash
 - created and updated timestamps
+- short `inProgressExpiresAt` lease timestamp
 - expiration timestamp for TTL
 
 The table uses on-demand billing, server-side encryption, and TTL on `expiresAt`. Point-in-time recovery is not enabled because the existing reference environment does not enable PITR for the items table and the idempotency records are short-lived operational records.
 
 ## Concurrency model
 
-The handler first writes an `IN_PROGRESS` reservation with a conditional `PutItem`. If another request with the same key arrives before completion, it reads the existing record consistently.
+The handler first writes an `IN_PROGRESS` reservation with a conditional `PutItem`. The reservation stores the generated item ID before the item is created. If another request with the same key arrives before completion, it reads the existing record with a strongly consistent read.
 
 Completion uses `TransactWriteItems` to atomically:
 
@@ -59,15 +60,19 @@ Completion uses `TransactWriteItems` to atomically:
 - mark the idempotency record `COMPLETED`
 - store the final response needed for replay
 
-This keeps item creation and completed replay state together once the request reaches the completion step.
+The transaction includes a deterministic DynamoDB `ClientRequestToken` derived from the key, request fingerprint, and item ID. DynamoDB treats identical transaction retries with the same token as idempotent for its documented 10-minute window. The token protects short-term transaction retry ambiguity; the idempotency table remains the longer business replay record.
+
+This keeps item creation and completed replay state together once the request reaches the completion step. If an `IN_PROGRESS` record's `inProgressExpiresAt` has passed and the stored fingerprint matches the incoming request, a later request can conditionally take over that reservation and reuse the stored item ID. The conditional takeover checks status, fingerprint, and the expired lease so only one concurrent recovery attempt can win.
 
 ## Failure windows
 
-If Lambda creates the reservation but fails before the transaction, no item is created. The handler attempts to delete the reservation when it catches an item creation or completion failure.
+If Lambda creates the reservation but fails before the transaction, no item is created. The reservation remains until the short `inProgressExpiresAt` lease allows a same-payload retry to recover it.
 
-If Lambda exits unexpectedly after reservation but before transaction, the `IN_PROGRESS` record can remain until its short reservation expiry. A later request can overwrite an expired `IN_PROGRESS` reservation, and DynamoDB TTL eventually removes stale records.
+If Lambda exits unexpectedly after reservation but before transaction, the `IN_PROGRESS` record can remain until its short reservation lease expires. A later same-payload request can conditionally take over an expired `IN_PROGRESS` reservation, while a different payload still receives `409 Conflict`.
 
-If the transaction succeeds but the client times out before receiving the response, replay returns the stored original response.
+If the transaction succeeds but the client times out before receiving the response, replay returns the stored original response. If the Lambda client receives an ambiguous transaction error, the handler performs a strongly consistent read of the idempotency record. A `COMPLETED` record returns the saved response; an unresolved `IN_PROGRESS` record is left in place for lease-based recovery instead of being deleted blindly.
+
+DynamoDB TTL is asynchronous background cleanup. It is not used as the runtime lease or concurrency-control mechanism.
 
 ## Alternatives considered
 
@@ -108,5 +113,7 @@ Logs include a short hash of the key for correlation, not the full key. Terrafor
 The idempotency contract is scoped to `POST /items`; it does not change `GET`, `PUT`, or `DELETE`.
 
 The record TTL is not immediate deletion. Operators should treat stuck records carefully and avoid deleting unknown records in active environments.
+
+This design provides retry-safe item creation within the documented idempotency retention window. It does not claim exactly-once delivery across all network, client, and service failure modes.
 
 This decision has not been validated against a deployed AWS API in this batch. Deployment validation should verify first create, exact replay, same-key conflict, normal item lifecycle, and CloudWatch metric behavior.

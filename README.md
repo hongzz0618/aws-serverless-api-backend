@@ -100,7 +100,7 @@ Behavior:
 - Reusing the same key while the first request is still in progress returns `409 Conflict`.
 - Internal DynamoDB errors return safe `500` responses without exposing request fingerprints, table names, AWS request IDs, or stack traces.
 
-The idempotency table uses TTL for short-lived records. This supports retry safety for uncertain create outcomes, but deployed behavior still needs validation against a real AWS API before stronger runtime claims are made.
+The idempotency table keeps a short `IN_PROGRESS` lease for recovery and uses DynamoDB TTL only for asynchronous cleanup. Completed records are retained for a limited replay window. This supports retry-safe item creation within that window, but deployed behavior still needs validation against a real AWS API before stronger runtime claims are made.
 
 ## Example Requests
 

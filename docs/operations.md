@@ -199,11 +199,21 @@ Idempotency key in progress returns `409`:
 
 Stuck `IN_PROGRESS` idempotency records:
 
-- The reservation uses a short application expiry and DynamoDB TTL.
-- A later request can overwrite an expired `IN_PROGRESS` reservation.
-- TTL deletion is not immediate, so a stale record may remain visible after expiration.
+- The reservation uses a short application lease (`inProgressExpiresAt`) and a separate DynamoDB TTL cleanup timestamp (`expiresAt`).
+- A later same-payload request can conditionally take over an expired `IN_PROGRESS` reservation and reuse the stored item ID.
+- A different payload with the same key still returns `409 Conflict`, even if the old reservation lease has expired.
+- TTL deletion is asynchronous and not immediate, so a stale record may remain visible after expiration.
+- TTL is storage cleanup, not the runtime concurrency-control mechanism.
 - Do not manually delete unknown records in an active environment unless the request is understood and no client can still be relying on that key.
 - In the reference environment, teardown through `terraform destroy` removes the idempotency table with the rest of the stack.
+
+Ambiguous create transaction outcome:
+
+- The create transaction uses DynamoDB `ClientRequestToken` for the service's documented short retry window.
+- The idempotency table remains the durable business replay record for the configured retention window.
+- If Lambda receives an uncertain transaction error, the handler reads the idempotency record strongly consistently.
+- If the record is `COMPLETED`, the API returns the stored original `201` response with `Idempotency-Replayed: true`.
+- If the record is still `IN_PROGRESS`, the handler leaves it in place for lease-based recovery rather than deleting it blindly.
 
 Duplicate generated item ID returns `409`:
 

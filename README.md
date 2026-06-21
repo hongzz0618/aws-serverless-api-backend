@@ -37,8 +37,8 @@ Client
 | --- | --- |
 | API Gateway | Public HTTP entry point for `POST /items`, `GET /items/{id}`, `PUT /items/{id}`, and `DELETE /items/{id}` |
 | AWS Lambda | Runs separate TypeScript handlers for create, read, update, and delete operations |
-| DynamoDB | Stores versioned item records using `id` as the partition key |
-| IAM | Allows API Gateway to invoke Lambda and scopes Lambda data access to the project DynamoDB table |
+| DynamoDB | Stores versioned item records using `id` as the partition key, plus short-lived idempotency records for replay-safe creates |
+| IAM | Allows API Gateway to invoke Lambda and scopes Lambda data access to the project DynamoDB tables |
 | CloudWatch Logs | Receives structured Lambda logs and API Gateway access logs with configurable retention |
 | CloudWatch Alarms | Provides basic alarms for Lambda errors/throttles, API Gateway 4XX/5XX responses, API latency, and DynamoDB system errors |
 | Terraform | Defines the DynamoDB table, IAM role and policy, Lambda functions, API Gateway resources, deployment stage, operational settings, and output URL |
@@ -50,7 +50,7 @@ The API is deployed to the `dev` API Gateway stage.
 
 | Method | Route | Purpose | Success response |
 | --- | --- | --- | --- |
-| `POST` | `/items` | Create an item with a generated UUID and timestamp | `201 Created` |
+| `POST` | `/items` | Create an item with a generated UUID, timestamp, and required idempotency key | `201 Created` |
 | `GET` | `/items/{id}` | Fetch an item by UUID | `200 OK` |
 | `PUT` | `/items/{id}` | Update an item using version-based optimistic locking | `200 OK` |
 | `DELETE` | `/items/{id}` | Delete an item by UUID | `200 OK` |
@@ -61,6 +61,9 @@ Request validation is implemented in the Lambda application layer with Zod.
 
 For `POST /items`:
 
+- `Idempotency-Key` header is required.
+- The key must be 8 to 128 characters.
+- Allowed key characters are letters, digits, hyphen, underscore, colon, and period.
 - Request body must be valid JSON.
 - `name` is required.
 - `name` must be a string.
@@ -83,6 +86,22 @@ For `GET /items/{id}` and `DELETE /items/{id}`:
 
 Invalid requests return `400` JSON error responses. Missing items return `404`. Stale update versions return `409`.
 
+### Idempotent Create Behavior
+
+`POST /items` requires callers to provide a client-generated `Idempotency-Key` header. The key is not inferred from the request body.
+
+The create handler computes a stable fingerprint from the validated and normalized create request. For the current schema, the fingerprint includes the trimmed `name` value only.
+
+Behavior:
+
+- First request with a new key and valid body creates the item and returns `201 Created`.
+- Replaying the same key with the same valid body returns the original `201 Created` response, including the same item ID, and adds `Idempotency-Replayed: true`.
+- Reusing the same key with a different valid body returns `409 Conflict`.
+- Reusing the same key while the first request is still in progress returns `409 Conflict`.
+- Internal DynamoDB errors return safe `500` responses without exposing request fingerprints, table names, AWS request IDs, or stack traces.
+
+The idempotency table uses TTL for short-lived records. This supports retry safety for uncertain create outcomes, but deployed behavior still needs validation against a real AWS API before stronger runtime claims are made.
+
 ## Example Requests
 
 Replace `<API_URL>` with the Terraform output value:
@@ -96,6 +115,7 @@ Create an item:
 ```bash
 curl -X POST "<API_URL>/items" \
   -H "Content-Type: application/json" \
+  -H "Idempotency-Key: item-create:00000001" \
   -d '{"name":"Laptop charger"}'
 ```
 
@@ -156,7 +176,7 @@ This project includes several backend engineering practices beyond the minimum r
 - Shared utility modules for HTTP responses, environment variable handling, JSON parsing, logging, and validation
 - Zod request validation for request bodies and path parameters
 - Unit tests with Vitest for success paths, validation failures, not-found responses, and DynamoDB error handling
-- DynamoDB conditional writes for create and version-based optimistic updates
+- DynamoDB conditional writes, idempotency-key handling for create, and version-based optimistic updates
 - GitHub Actions CI for install, typecheck, tests, build, production dependency audit, Lambda packaging, Terraform formatting, and Terraform validation
 - `npm audit --omit=dev` included in CI for production dependency vulnerability checks
 - Structured JSON logging from Lambda handlers
@@ -175,7 +195,7 @@ Current state:
 - The deployed API is publicly reachable unless additional controls are added.
 - API Gateway throttling is configured to reduce accidental abuse and cost risk, but it is not a substitute for authentication or WAF protections.
 - Lambda invoke permissions are scoped to the API Gateway routes that call each function.
-- Lambda DynamoDB permissions are scoped to the project table and limited to `PutItem`, `GetItem`, `UpdateItem`, and `DeleteItem`.
+- Lambda DynamoDB permissions are scoped to the project tables and limited to the actions used by the handlers, including `TransactWriteItems` for idempotent create completion.
 - No secrets should be committed to the repository, Terraform files, Lambda source, or local configuration.
 
 CORS and OPTIONS preflight handling are not configured in this reference implementation. The current examples assume direct API usage with tools such as curl or backend clients. Browser-based clients should add explicit CORS headers and OPTIONS routes with a specific allowed origin rather than using permissive defaults. CORS is not an authentication mechanism.
@@ -198,9 +218,10 @@ Logged fields include:
 - Operation name
 - HTTP status code for completed outcomes
 - Safe item ID values for item-level operations
+- Short idempotency key correlation hashes for create retry diagnostics
 - Error name and error message for unexpected failures
 
-The handlers do not log full request bodies. That keeps potentially sensitive user-submitted data, such as item names, out of application logs.
+The handlers do not log full request bodies, full idempotency keys, request fingerprints, or sensitive headers. That keeps potentially sensitive user-submitted data, such as item names, out of application logs.
 
 API Gateway access logs are also enabled for the `dev` stage. They include request metadata such as request ID, source IP, HTTP method, resource path, status, response length, and integration error message when API Gateway provides one. They intentionally do not include request bodies, authorization headers, sensitive headers, or environment variables.
 
@@ -208,12 +229,15 @@ The API Gateway stage enables CloudWatch method metrics and uses basic throttlin
 
 CloudWatch alarms are created by default for Lambda errors, Lambda throttles, API Gateway 4XX/5XX responses, API Gateway average latency, and DynamoDB system errors. These use conservative example thresholds for a small reference backend. The alarms do not require SNS setup; provide `alarm_actions` if notification actions should be attached.
 
+The create handler also emits stable idempotency events for replay, conflict, in-progress, reservation, and failure paths. Terraform creates log metric filters for replay, conflict, and idempotency failure counts. Replay is expected retry behavior and is not alarmed by default. Conflict is usually client behavior and is also not alarmed by default.
+
 Current observability gaps:
 
 - No distributed tracing yet
 - No dashboard yet
 - No per-route or per-client alarm tuning yet
 - No alarm notification destination unless `alarm_actions` is configured
+- Idempotency metrics still require deployed CloudWatch log events to prove live matching
 
 ## Cost Awareness
 
@@ -291,7 +315,7 @@ Use the `api_url` output as `<API_URL>` in the example requests.
 
 ### Optional Smoke Test
 
-After deployment, the repository includes a small smoke test helper for the item lifecycle. It creates an item, verifies version `1`, updates it, verifies version `2`, checks that a stale update returns `409`, deletes the item, and confirms a later read returns `404`. It calls the deployed HTTP API directly and does not require AWS credentials.
+After deployment, the repository includes a small smoke test helper for the item lifecycle. It creates an item with an idempotency key, replays the same create request and verifies the same item ID, checks that the same key with a different payload returns `409`, verifies version `1`, updates it, verifies version `2`, checks that a stale update returns `409`, deletes the item, and confirms a later read returns `404`. It calls the deployed HTTP API directly and does not require AWS credentials.
 
 Run it from the `lambdas` directory with `API_URL` set to the Terraform output value:
 
@@ -338,6 +362,8 @@ The CI workflow validates the application and infrastructure definitions, but it
 | `lambdas/deleteItem.ts` | Lambda handler for `DELETE /items/{id}` |
 | `lambdas/src/utils/` | Shared Lambda utilities |
 | `lambdas/src/validation/` | Zod request validation |
+| `lambdas/src/idempotency.ts` | Idempotency reservation, replay, conflict, and completion logic for `POST /items` |
+| `lambdas/src/requestFingerprint.ts` | Stable request fingerprint and key-correlation hashing |
 | `lambdas/__tests__/` | Vitest unit tests |
 | `scripts/package-lambdas.sh` | Build and packaging script for Lambda zip artifacts |
 | `scripts/smoke-test.mjs` | Optional post-deployment API smoke test |
@@ -367,7 +393,7 @@ This project is intentionally limited. The main limitations are:
 - No automated smoke tests against a deployed API in CI
 - No CI/CD deployment pipeline
 - Single-table DynamoDB design is intentionally simple and only supports lookup by `id`
-- `POST /items` prevents overwrites for the generated item key, but it does not provide retry idempotency because each retry can generate a new UUID
+- `POST /items` uses an idempotency table for replay-safe creates, but deployed runtime behavior and CloudWatch metric matching still need live validation
 - Optimistic locking protects item updates from stale versions, but it is still a small single-item workflow rather than a complete domain concurrency model
 
 ## Architecture Trade-Offs
@@ -396,6 +422,7 @@ Lightweight ADRs capture the main design choices and trade-offs behind this proj
 - [004. Evaluate Authentication and Access-Control Options](docs/adr/004-authentication-and-access-control-options.md)
 - [005. Use Conditional Writes for Item Creation](docs/adr/005-use-conditional-writes-for-item-creation.md)
 - [006. Use Optimistic Locking for Item Updates](docs/adr/006-use-optimistic-locking-for-item-updates.md)
+- [007. Use Idempotency Keys for Item Creation](docs/adr/007-use-idempotency-keys-for-item-creation.md)
 
 ## Architecture Discussion Notes
 
@@ -405,6 +432,7 @@ This project demonstrates:
 - Terraform infrastructure as code for a focused AWS backend reference
 - DynamoDB key-value access using `id` as the primary lookup pattern
 - DynamoDB conditional creates and conditional updates for no-overwrite and optimistic-locking behavior
+- Idempotency-key handling for replay-safe create requests and retry ambiguity
 - Input validation with Zod before calling DynamoDB
 - CI quality gates for TypeScript, tests, builds, dependency audit, packaging, and Terraform validation
 - Structured JSON logging for operational debugging
@@ -417,6 +445,7 @@ Good discussion prompts:
 - Where should throttling, access logs, and alarms be configured?
 - When would DynamoDB be a good fit, and when would RDS be better?
 - How should stale updates, deleted records, and retry behavior be represented in an API contract?
+- What failure windows remain when idempotency uses a reservation plus transaction model?
 - How would the Terraform be split for multiple environments?
 - What smoke tests would be valuable after deployment?
 - How would CI evolve into safe deployment automation?
@@ -433,6 +462,7 @@ Priority improvements:
 - Expand ADR coverage for future design changes
 - Wire the smoke test into a controlled post-deployment workflow
 - Add a controlled deployment workflow after validation passes
+- Validate idempotent create behavior and CloudWatch idempotency metrics in a deployed environment
 
 ## Cleanup
 

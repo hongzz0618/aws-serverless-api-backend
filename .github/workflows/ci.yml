@@ -46,6 +46,14 @@ jobs:
         working-directory: lambdas
         run: npm test
 
+      - name: Validate OpenAPI contract
+        working-directory: lambdas
+        run: npm run contract:validate
+
+      - name: Test API contract
+        working-directory: lambdas
+        run: npm run test:contract
+
       - name: Build Lambda code
         working-directory: lambdas
         run: npm run build

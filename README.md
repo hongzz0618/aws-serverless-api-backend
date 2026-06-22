@@ -1,516 +1,290 @@
 # AWS Serverless API Backend
 
-## Project Summary
+A TypeScript serverless API for managing simple inventory or asset records on AWS.
 
-This repository implements a small AWS serverless backend for managing inventory or asset records. It exposes a REST-style API through API Gateway, runs TypeScript Lambda handlers, stores records in DynamoDB, and provisions the cloud infrastructure with Terraform.
+The project uses API Gateway, Lambda, DynamoDB, Terraform, and GitHub Actions. Its main focus is reliable request handling, explicit API contracts, retry-safe writes, concurrency control, observability, and infrastructure validation.
 
-The project is designed as a cloud/backend engineering reference implementation: realistic enough to discuss architecture, validation, IAM, observability, CI, and trade-offs, while still intentionally scoped as a learning-oriented architecture lab rather than a complete service baseline.
+## Highlights
 
-## Real-World Use Case
+- Four REST-style endpoints implemented with TypeScript Lambda handlers
+- Idempotency keys for retry-safe item creation
+- Optimistic locking for concurrent item updates
+- Zod request validation and consistent JSON error responses
+- OpenAPI contract validation in CI
+- Structured Lambda logs, API Gateway access logs, metrics, and alarms
+- Terraform-managed infrastructure and scoped IAM permissions
+- Reproducible Lambda packaging with final artifact verification
+- Unit, contract, packaging, Terraform, and optional deployment smoke tests
 
-The API can be viewed as the backend for a simple internal inventory or asset registry. A team could use this pattern to create, look up, and remove item records without operating servers, containers, or a relational database.
-
-Example scenarios:
-
-- Tracking lightweight internal assets by ID
-- Supporting a small admin tool or internal dashboard
-- Prototyping a serverless item-management workflow
-- Demonstrating a DynamoDB key-value access pattern behind an HTTP API
-
-## Architecture Diagram
+## Architecture
 
 ![AWS Serverless API Diagram](diagram/serverless-api-backend.png)
 
-## Architecture Overview
-
-```text
-Client
-  -> API Gateway REST API
-  -> Lambda handler
-  -> DynamoDB table
-  -> Lambda handler
-  -> API Gateway response
-  -> Client
-```
-
-| Component | Role in this project |
+| Component | Responsibility |
 | --- | --- |
-| API Gateway | Public HTTP entry point for `POST /items`, `GET /items/{id}`, `PUT /items/{id}`, and `DELETE /items/{id}` |
-| AWS Lambda | Runs separate TypeScript handlers for create, read, update, and delete operations |
-| DynamoDB | Stores versioned item records using `id` as the partition key, plus short-lived idempotency records for replay-safe creates |
-| IAM | Allows API Gateway to invoke Lambda and scopes Lambda data access to the project DynamoDB tables |
-| CloudWatch Logs | Receives structured Lambda logs and API Gateway access logs with configurable retention |
-| CloudWatch Alarms | Provides basic alarms for Lambda errors/throttles, API Gateway 4XX/5XX responses, API latency, and DynamoDB system errors |
-| Terraform | Defines the DynamoDB table, IAM role and policy, Lambda functions, API Gateway resources, deployment stage, operational settings, and output URL |
-| GitHub Actions CI | Runs Lambda checks, packages deployment artifacts, and validates Terraform formatting/configuration |
+| API Gateway | Exposes the HTTP API and forwards requests to Lambda |
+| Lambda | Runs separate TypeScript handlers for create, read, update, and delete |
+| DynamoDB | Stores versioned items and short-lived idempotency records |
+| IAM | Restricts API Gateway invocation and Lambda access to project resources |
+| CloudWatch | Stores application/access logs, metrics, filters, and alarms |
+| Terraform | Defines the AWS infrastructure and operational configuration |
+| GitHub Actions | Validates, tests, packages, and checks the application and infrastructure |
 
-## API Endpoints
+## API
+
+| Method | Route | Behavior |
+| --- | --- | --- |
+| `POST` | `/items` | Creates an item using a required `Idempotency-Key` |
+| `GET` | `/items/{id}` | Retrieves an item by UUID |
+| `PUT` | `/items/{id}` | Updates an item using version-based optimistic locking |
+| `DELETE` | `/items/{id}` | Deletes an item by UUID |
 
 The API is deployed to the `dev` API Gateway stage.
 
-| Method | Route | Purpose | Success response |
-| --- | --- | --- | --- |
-| `POST` | `/items` | Create an item with a generated UUID, timestamp, and required idempotency key | `201 Created` |
-| `GET` | `/items/{id}` | Fetch an item by UUID | `200 OK` |
-| `PUT` | `/items/{id}` | Update an item using version-based optimistic locking | `200 OK` |
-| `DELETE` | `/items/{id}` | Delete an item by UUID | `200 OK` |
+### Request behavior
 
-## API Contract
+`POST /items` requires a client-generated `Idempotency-Key`.
 
-The OpenAPI contract lives at `openapi/openapi.yaml` and describes the currently implemented API Gateway routes and Lambda handler behavior. It uses OpenAPI 3.0.3 for broad validator compatibility and stable JSON Schema handling.
+- A new key creates the item and returns `201 Created`.
+- Replaying the same key and payload returns the original response.
+- Reusing the key with another payload returns `409 Conflict`.
+- Concurrent requests using an active reservation return `409 Conflict`.
 
-The contract covers the four implemented routes, JSON request and response bodies, validation errors, idempotent create semantics, replay headers, and optimistic locking/version-conflict behavior. It intentionally does not define authentication, CORS, OPTIONS routes, generated SDKs, or endpoints that are not present in Terraform.
+`PUT /items/{id}` requires the current item version.
 
-OpenAPI is a human-readable and CI-validated contract in this repository. API Gateway deployment is still defined by Terraform; the OpenAPI file is not imported by API Gateway and is not a deployment source of truth.
+- A valid version updates the item and increments its version.
+- A stale version returns `409 Conflict`.
+- Missing items return `404 Not Found`.
 
-### Contract Validation
+Invalid request bodies, path parameters, and idempotency keys return `400 Bad Request`.
 
-Run contract checks locally from `lambdas/`:
+## API contract and validation
+
+Request validation is implemented with Zod before data is sent to DynamoDB.
+
+The OpenAPI 3.0.3 contract is stored at:
+
+```text
+openapi/openapi.yaml
+````
+
+CI checks that:
+
+* The OpenAPI document is valid
+* Operation IDs are unique
+* Documented method and route pairs match Terraform
+* Representative Lambda responses match the response schemas
+
+The contract is documentation and a CI validation source. Terraform remains the deployment source for API Gateway.
+
+Run the contract checks from `lambdas/`:
 
 ```bash
 npm run contract:validate
 npm run test:contract
 ```
 
-`contract:validate` parses and validates the OpenAPI file, resolves `$ref` values, checks unique operation IDs, compares OpenAPI method/path pairs with the Terraform API Gateway methods, verifies key request/response contract details, and confirms CI runs the contract checks. `test:contract` exercises representative handler responses and validates them against the OpenAPI response schemas.
+## Idempotency and concurrency
 
-These checks do not require AWS credentials, a deployed API, or network access after dependencies are installed. Live AWS behavior still requires the optional post-deployment smoke test with an explicit `API_URL`.
+Item creation uses a separate DynamoDB idempotency table.
 
-## Lambda Artifact Assurance
+The handler stores a stable request fingerprint, reserves the key before creating the item, and retains the completed response for a limited replay window. DynamoDB TTL is used for asynchronous record cleanup.
 
-The official Lambda packages are created by `scripts/package-lambdas.sh` and verified by `npm run artifacts:verify` from the `lambdas/` directory. The verification step checks the final ZIP files that Terraform references, not only TypeScript source or `dist/` output.
+Item updates use DynamoDB conditional writes and an integer `version` field to reject stale updates.
 
-The verifier confirms that the packaged handler module and exported `handler` function can be loaded, runtime dependencies resolve from inside each extracted artifact, dev-only tooling is absent, and Terraform `filename`, `handler`, `runtime`, and `source_code_hash` wiring matches the generated ZIPs. It also writes a generated `lambdas/artifacts-manifest.json` containing SHA-256 checksums, sizes, handlers, runtimes, and file counts for the final artifacts. The manifest and ZIP files are generated build outputs and remain ignored by Git.
+The related decisions are documented in:
 
-Artifact verification is an integrity check for CI-produced ZIP contents. It does not deploy the Lambda functions, invoke them in AWS, or prove live API behavior.
+* [Conditional item creation](docs/adr/005-use-conditional-writes-for-item-creation.md)
+* [Optimistic locking](docs/adr/006-use-optimistic-locking-for-item-updates.md)
+* [Idempotency keys](docs/adr/007-use-idempotency-keys-for-item-creation.md)
 
-### Validation Behavior
+## CI and artifact verification
 
-Request validation is implemented in the Lambda application layer with Zod.
+GitHub Actions runs two main groups of checks:
 
-For `POST /items`:
+**Application**
 
-- `Idempotency-Key` header is required.
-- The key must be 8 to 128 characters.
-- Allowed key characters are letters, digits, hyphen, underscore, colon, and period.
-- Request body must be valid JSON.
-- `name` is required.
-- `name` must be a string.
-- `name` is trimmed before storage.
-- Empty or whitespace-only names are rejected.
-- `name` must be 100 characters or fewer.
+* Dependency installation
+* TypeScript type checking
+* Unit and contract tests
+* Application build
+* Production dependency audit
+* Lambda packaging
+* Final ZIP artifact verification
 
-For `PUT /items/{id}`:
+**Infrastructure**
 
-- `id` is required and must be a valid UUID.
-- Request body must be valid JSON.
-- `name` follows the same validation rules as `POST /items`.
-- `version` is required.
-- `version` must be a positive integer.
+* Packaged artifact download
+* Terraform formatting
+* Terraform initialization without a backend
+* Terraform validation
 
-For `GET /items/{id}` and `DELETE /items/{id}`:
-
-- `id` is required.
-- `id` must be a valid UUID.
-
-Invalid requests return `400` JSON error responses. Missing items return `404`. Stale update versions return `409`.
-
-### Idempotent Create Behavior
-
-`POST /items` requires callers to provide a client-generated `Idempotency-Key` header. The key is not inferred from the request body.
-
-The create handler computes a stable fingerprint from the validated and normalized create request. For the current schema, the fingerprint includes the trimmed `name` value only.
-
-Behavior:
-
-- First request with a new key and valid body creates the item and returns `201 Created`.
-- Replaying the same key with the same valid body returns the original `201 Created` response, including the same item ID, and adds `Idempotency-Replayed: true`.
-- Reusing the same key with a different valid body returns `409 Conflict`.
-- Reusing the same key while the first request is still in progress returns `409 Conflict`.
-- Internal DynamoDB errors return safe `500` responses without exposing request fingerprints, table names, AWS request IDs, or stack traces.
-
-The idempotency table keeps a short `IN_PROGRESS` lease for recovery and uses DynamoDB TTL only for asynchronous cleanup. Completed records are retained for a limited replay window. This supports retry-safe item creation within that window, but deployed behavior still needs validation against a real AWS API before stronger runtime claims are made.
-
-## Example Requests
-
-Replace `<API_URL>` with the Terraform output value:
+The packaging script creates the Lambda ZIP files referenced by Terraform:
 
 ```bash
-terraform output api_url
+bash scripts/package-lambdas.sh
 ```
 
-Create an item:
+The verifier checks the final ZIP contents, exported handlers, runtime dependencies, and Terraform artifact wiring:
 
 ```bash
-curl -X POST "<API_URL>/items" \
-  -H "Content-Type: application/json" \
-  -H "Idempotency-Key: item-create:00000001" \
-  -d '{"name":"Laptop charger"}'
+cd lambdas
+npm run artifacts:verify
 ```
 
-Example response:
-
-```json
-{
-  "message": "Item created",
-  "id": "00000000-0000-4000-8000-000000000001",
-  "version": 1
-}
-```
-
-Get an item:
-
-```bash
-curl -X GET "<API_URL>/items/<ITEM_ID>"
-```
-
-Update an item:
-
-```bash
-curl -X PUT "<API_URL>/items/<ITEM_ID>" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Laptop charger - spare","version":1}'
-```
-
-Example response:
-
-```json
-{
-  "id": "00000000-0000-4000-8000-000000000001",
-  "name": "Laptop charger - spare",
-  "createdAt": "2026-05-14T10:00:00.000Z",
-  "version": 2
-}
-```
-
-If another update has already changed the item version, the stale update returns `409 Conflict`:
-
-```json
-{
-  "error": "Item version conflict"
-}
-```
-
-Delete an item:
-
-```bash
-curl -X DELETE "<API_URL>/items/<ITEM_ID>"
-```
-
-## Engineering Quality Signals
-
-This project includes several backend engineering practices beyond the minimum required to make a tutorial API work:
-
-- TypeScript strict mode for Lambda handlers and shared utilities
-- Shared utility modules for HTTP responses, environment variable handling, JSON parsing, logging, and validation
-- Zod request validation for request bodies and path parameters
-- Unit tests with Vitest for success paths, validation failures, not-found responses, and DynamoDB error handling
-- DynamoDB conditional writes, idempotency-key handling for create, and version-based optimistic updates
-- GitHub Actions CI for install, typecheck, tests, build, production dependency audit, Lambda packaging, Terraform formatting, and Terraform validation
-- `npm audit --omit=dev` included in CI for production dependency vulnerability checks
-- Structured JSON logging from Lambda handlers
-- API Gateway access logging, CloudWatch method metrics, and basic throttling configured with Terraform
-- CloudWatch alarms for common API, Lambda, and DynamoDB failure signals
-- Terraform-managed AWS infrastructure instead of manual console setup
-- Lambda deployment packages generated by `scripts/package-lambdas.sh`
-
-## Security Considerations
-
-This project intentionally keeps API security simple so the core serverless architecture is easy to inspect.
-
-Current state:
-
-- API Gateway methods currently use `authorization = "NONE"`.
-- The deployed API is publicly reachable unless additional controls are added.
-- API Gateway throttling is configured to reduce accidental abuse and cost risk, but it is not a substitute for authentication or WAF protections.
-- Lambda invoke permissions are scoped to the API Gateway routes that call each function.
-- Lambda uses a shared execution role. Its DynamoDB permissions are scoped to the two project tables and limited to the union of actions required by the four handlers, including `TransactWriteItems` for idempotent create completion.
-- Lambda log permissions are defined inline and scoped to the Terraform-managed Lambda log groups; API Gateway logging uses an explicit CloudWatch Logs action allowlist.
-- GitHub Actions uses a read-only repository token, does not receive AWS credentials, and does not deploy infrastructure.
-- Production dependencies are checked with `npm audit --omit=dev`; dev-only audit findings should be reviewed separately before broadening use.
-- No secrets should be committed to the repository, Terraform files, Lambda source, or local configuration.
-
-CORS and OPTIONS preflight handling are not configured in this reference implementation. The current examples assume direct API usage with tools such as curl or backend clients. Browser-based clients should add explicit CORS headers and OPTIONS routes with a specific allowed origin rather than using permissive defaults. CORS is not an authentication mechanism.
-
-Before broader use, the API should add an authentication and authorization layer such as Amazon Cognito, a JWT authorizer, IAM authorization, or another identity-aware gateway pattern. Public APIs should also add abuse protection appropriate to the use case.
-
-Authentication and access-control options are discussed in [ADR 004](docs/adr/004-authentication-and-access-control-options.md). Authentication is not implemented in this batch; the ADR documents the current risk and the likely next options.
-
-## Observability
-
-The Lambda handlers emit structured JSON logs to CloudWatch Logs. These logs are designed to be readable by humans and queryable by log tooling.
-
-Logged fields include:
-
-- Timestamp
-- Log level
-- Service name
-- AWS request ID when Lambda context is available
-- Route
-- Operation name
-- HTTP status code for completed outcomes
-- Safe item ID values for item-level operations
-- Short idempotency key correlation hashes for create retry diagnostics
-- Error name for unexpected failures
-
-The handlers do not log full request bodies, full idempotency keys, request fingerprints, arbitrary exception messages, or sensitive headers. That keeps potentially sensitive user-submitted data, such as item names, and internal resource details out of application logs.
-
-API Gateway access logs are also enabled for the `dev` stage. They include request metadata such as request ID, source IP, HTTP method, resource path, status, response length, and integration error message when API Gateway provides one. They intentionally do not include request bodies, authorization headers, sensitive headers, or environment variables.
-
-The API Gateway stage enables CloudWatch method metrics and uses basic throttling defaults of 20 requests per second with a burst limit of 40 requests. These values are intentionally modest for a demo project and can be adjusted with Terraform variables.
-
-CloudWatch alarms are created by default for Lambda errors, Lambda throttles, API Gateway 4XX/5XX responses, API Gateway average latency, and DynamoDB system errors. These use conservative example thresholds for a small reference backend. The alarms do not require SNS setup; provide `alarm_actions` if notification actions should be attached.
-
-The create handler also emits stable idempotency events for replay, conflict, in-progress, reservation, and failure paths. Terraform creates log metric filters for replay, conflict, and idempotency failure counts. Replay is expected retry behavior and is not alarmed by default. Conflict is usually client behavior and is also not alarmed by default.
-
-Current observability gaps:
-
-- No distributed tracing yet
-- No dashboard yet
-- No per-route or per-client alarm tuning yet
-- No alarm notification destination unless `alarm_actions` is configured
-- Idempotency metrics still require deployed CloudWatch log events to prove live matching
-
-## Cost Awareness
-
-The architecture uses a low-operational-overhead serverless model:
-
-- API Gateway charges mainly by request volume.
-- Lambda charges by invocation count and duration.
-- DynamoDB is configured with on-demand billing.
-- CloudWatch Logs can still create cost through ingestion and retention.
-- API Gateway access logs add a small CloudWatch Logs ingestion and storage cost.
-- CloudWatch alarms add a small monthly monitoring cost while enabled.
-- API Gateway throttling helps reduce accidental request spikes and abuse-related cost risk.
-
-Terraform configures Lambda and API Gateway access log groups with 7-day retention by default to reduce long-lived log storage cost. After demos or testing, run `terraform destroy` to avoid leaving AWS resources active.
+CI validates the repository but does not automatically deploy infrastructure to AWS.
 
 ## Deployment
 
-Prerequisites:
+### Prerequisites
 
-- AWS account and credentials configured locally
-- Terraform `>= 1.5.0`
-- Node.js and npm
-- Bash-compatible shell
-- `zip` available on `PATH`
+* AWS account and local credentials
+* Terraform `>= 1.5.0`
+* Node.js and npm
+* Bash-compatible shell
+* `zip` available on `PATH`
 
-Install and validate Lambda code:
+### Validate the application
 
 ```bash
 cd lambdas
 npm ci
 npm run typecheck
 npm test
+npm run contract:validate
+npm run test:contract
 npm run build
 npm audit --omit=dev
 cd ..
 ```
 
-Package Lambda functions from the repository root:
+### Package and validate Terraform
 
 ```bash
 bash scripts/package-lambdas.sh
-```
 
-The packaging script installs dependencies, compiles the TypeScript handlers, installs production dependencies for the packages, and creates the Lambda zip files expected by Terraform:
+cd lambdas
+npm run artifacts:verify
+cd ../terraform
 
-- `lambdas/createItem.zip`
-- `lambdas/getItem.zip`
-- `lambdas/updateItem.zip`
-- `lambdas/deleteItem.zip`
-
-Configure local Terraform variables:
-
-```bash
-cd terraform
 cp terraform.tfvars.example terraform.tfvars
-# Then edit terraform.tfvars with local values.
-```
+# Edit terraform.tfvars with local values.
 
-Validate Terraform:
-
-```bash
 terraform fmt -check -recursive
 terraform init -backend=false
 terraform validate
 ```
 
-Deploy:
+### Deploy
 
 ```bash
 terraform apply
-terraform output api_url
+terraform output -raw api_url
 ```
 
-Use the `api_url` output as `<API_URL>` in the example requests.
+### Run the API smoke test
 
-### Optional Smoke Test
-
-After deployment, the repository includes a small smoke test helper for the item lifecycle. It creates an item with an idempotency key, replays the same create request and verifies the same item ID, checks that the same key with a different payload returns `409`, verifies version `1`, updates it, verifies version `2`, checks that a stale update returns `409`, deletes the item, and confirms a later read returns `404`. It calls the deployed HTTP API directly and does not require AWS credentials.
-
-Run it from the `lambdas` directory with `API_URL` set to the Terraform output value:
+The smoke test exercises create, replay, conflict, read, update, stale update, delete, and not-found behavior against a deployed API.
 
 ```bash
-cd lambdas
+cd ../lambdas
 API_URL="<API_URL>" npm run smoke:test
 ```
 
-The smoke test is a post-deployment validation helper. It is not part of automatic deployment or the default GitHub Actions workflow because it requires a deployed API URL.
+For detailed validation, logs, alarms, failure scenarios, and cleanup guidance, see the [operations runbook](docs/operations.md).
 
-For deployment validation, logs, alarms, common failures, and cleanup notes, see the [operations runbook](docs/operations.md).
+## Observability and security
 
-### Deployment Safety and State Strategy
+The Lambda handlers emit structured JSON logs without logging full request bodies, idempotency keys, request fingerprints, or sensitive headers.
 
-GitHub Actions validates the Lambda code, packages deployment artifacts, and checks the Terraform configuration, but it does not automatically deploy to AWS. This is intentional for the current reference scope. Automatic deployment would need account-specific credentials, state management, approval rules, and rollback behavior that should be designed before being wired into CI.
+Terraform also configures:
 
-The Terraform configuration currently uses local state unless the operator configures a backend outside this repository. Local state is simple for a single-machine demo, but it is not a good coordination model for shared environments because state can be lost, duplicated, or changed concurrently. A safer path would add a remote backend with locking, then split configuration by environment such as `dev`, `staging`, and `prod`.
+* API Gateway access logs
+* Lambda and API Gateway metrics
+* Basic API throttling
+* Lambda error and throttle alarms
+* API Gateway 4XX, 5XX, and latency alarms
+* DynamoDB system-error alarms
+* Log metric filters for idempotency replay, conflict, and failure events
+* Configurable log retention and optional alarm actions
 
-Before broader use, deployment automation should add:
+IAM permissions are restricted to the API routes, Lambda log groups, and DynamoDB tables used by this project. GitHub Actions uses a read-only repository token and does not receive AWS credentials.
 
-- Remote Terraform state with locking
-- Separate variables and state per environment
-- Manual approval before applying infrastructure changes
-- Smoke tests against the deployed API URL after apply
-- A rollback or recovery strategy for failed deployments
-- Clear ownership for secrets, credentials, and AWS account boundaries
+The current API does not include authentication, authorization, CORS, or WAF protection. It should not be exposed for broader use without an identity and abuse-protection strategy.
 
-## CI Validation
+Authentication options are discussed in [ADR 004](docs/adr/004-authentication-and-access-control-options.md).
 
-GitHub Actions runs two jobs:
+## Deployment evidence
 
-- Lambda checks: `npm ci`, `npm run typecheck`, `npm test`, OpenAPI contract checks, `npm run build`, `npm audit --omit=dev`, Lambda packaging, and artifact verification
-- Terraform checks: artifact download, `terraform fmt -check -recursive`, `terraform init -backend=false`, and `terraform validate`
+<details>
+<summary>View deployment screenshots</summary>
 
-The CI workflow validates the application and infrastructure definitions, but it does not currently deploy to AWS.
+### API request and stored DynamoDB item
 
-## Repository Structure
+![API request and DynamoDB item](images/demo1.png)
 
-| Path | Purpose |
-| --- | --- |
-| `lambdas/createItem.ts` | Lambda handler for `POST /items` |
-| `lambdas/getItem.ts` | Lambda handler for `GET /items/{id}` |
-| `lambdas/updateItem.ts` | Lambda handler for `PUT /items/{id}` |
-| `lambdas/deleteItem.ts` | Lambda handler for `DELETE /items/{id}` |
-| `lambdas/src/utils/` | Shared Lambda utilities |
-| `lambdas/src/validation/` | Zod request validation |
-| `lambdas/src/idempotency.ts` | Idempotency reservation, replay, conflict, and completion logic for `POST /items` |
-| `lambdas/src/requestFingerprint.ts` | Stable request fingerprint and key-correlation hashing |
-| `lambdas/__tests__/` | Vitest unit tests |
-| `scripts/package-lambdas.sh` | Build and packaging script for Lambda zip artifacts |
-| `scripts/smoke-test.mjs` | Optional post-deployment API smoke test |
-| `terraform/` | Terraform configuration for AWS resources |
-| `.github/workflows/ci.yml` | GitHub Actions CI workflow |
-| `diagram/` | Architecture diagram source and rendered image |
-| `images/` | Demo screenshots |
+### API Gateway resources
 
-## Demo Screenshots
+![API Gateway resources](images/demo2.png)
 
-These screenshots show the deployed API being exercised and the backend resources/results visible during testing.
+### Additional deployment validation
 
-![Demo Screenshot 1](images/demo1.png)
-![Demo Screenshot 2](images/demo2.png)
-![Demo Screenshot 3](images/demo3.png)
+![Additional deployment validation](images/demo3.png)
 
-## Limitations
+</details>
 
-This project is intentionally limited. The main limitations are:
+## Current limitations and trade-offs
 
-- No authentication or authorization yet
-- Basic API Gateway throttling is configured, but there is no per-client usage plan or API key strategy
-- Basic API Gateway access logs are configured, but there is no dashboard or log analytics layer yet
-- Basic CloudWatch alarms are configured, but notifications require optional `alarm_actions`
-- No separate `dev`, `staging`, and `prod` environments
-- No Terraform remote state backend
-- No automated smoke tests against a deployed API in CI
-- No CI/CD deployment pipeline
-- Single-table DynamoDB design is intentionally simple and only supports lookup by `id`
-- `POST /items` uses an idempotency table for replay-safe creates, but deployed runtime behavior and CloudWatch metric matching still need live validation
-- Optimistic locking protects item updates from stale versions, but it is still a small single-item workflow rather than a complete domain concurrency model
+* Authentication and authorization are not implemented
+* Browser CORS and OPTIONS handling are not configured
+* Terraform uses local state unless an external backend is configured
+* There is no separate `dev`, `staging`, and `prod` environment structure
+* CI validates and packages the project but does not deploy it
+* Alarm notifications require optional `alarm_actions`
+* There is no CloudWatch dashboard or distributed tracing
+* DynamoDB access is intentionally limited to lookup by item ID
+* Idempotency behavior and metric filters should be revalidated after future infrastructure or application changes
 
-## Architecture Trade-Offs
+The serverless design reduces infrastructure management and fits small or irregular workloads. The trade-off is greater dependence on managed-service behavior, Lambda limits, API Gateway configuration, and access-pattern-driven DynamoDB modeling.
 
-Why serverless for this project:
+## Architecture decisions
 
-- Lower operational overhead than managing EC2 instances or containers
-- Natural fit for low-to-moderate traffic APIs and internal tools
-- Usage-based cost model for small workloads
-- Clear separation between HTTP routing, compute, and persistence
+<details>
+<summary>View architecture decision records</summary>
 
-Trade-offs:
+* [001. Use API Gateway, Lambda, and DynamoDB](docs/adr/001-use-serverless-api-gateway-lambda-dynamodb.md)
+* [002. Use DynamoDB for item storage](docs/adr/002-use-dynamodb-for-item-storage.md)
+* [003. Add validation, structured logs, and operability controls](docs/adr/003-operability-validation-and-observability.md)
+* [004. Evaluate authentication and access-control options](docs/adr/004-authentication-and-access-control-options.md)
+* [005. Use conditional writes for item creation](docs/adr/005-use-conditional-writes-for-item-creation.md)
+* [006. Use optimistic locking for item updates](docs/adr/006-use-optimistic-locking-for-item-updates.md)
+* [007. Use idempotency keys for item creation](docs/adr/007-use-idempotency-keys-for-item-creation.md)
 
-- Cold starts and Lambda limits need to be considered for latency-sensitive workloads.
-- API Gateway and Lambda behavior can be less transparent than a traditional long-running service.
-- DynamoDB requires access-pattern-first data modeling and is not a drop-in replacement for relational querying.
-- Broader use would need additional work around auth, throttling, monitoring, deployment safety, and environment separation.
+</details>
 
-## Architecture Decisions
+## Repository structure
 
-Lightweight ADRs capture the main design choices and trade-offs behind this project:
-
-- [001. Use API Gateway, Lambda, and DynamoDB for the serverless item API](docs/adr/001-use-serverless-api-gateway-lambda-dynamodb.md)
-- [002. Use DynamoDB for Item Storage](docs/adr/002-use-dynamodb-for-item-storage.md)
-- [003. Add Validation, Structured Logs, and Basic Operability Controls](docs/adr/003-operability-validation-and-observability.md)
-- [004. Evaluate Authentication and Access-Control Options](docs/adr/004-authentication-and-access-control-options.md)
-- [005. Use Conditional Writes for Item Creation](docs/adr/005-use-conditional-writes-for-item-creation.md)
-- [006. Use Optimistic Locking for Item Updates](docs/adr/006-use-optimistic-locking-for-item-updates.md)
-- [007. Use Idempotency Keys for Item Creation](docs/adr/007-use-idempotency-keys-for-item-creation.md)
-
-## Architecture Discussion Notes
-
-This project demonstrates:
-
-- Serverless API design using API Gateway, Lambda, and DynamoDB
-- Terraform infrastructure as code for a focused AWS backend reference
-- DynamoDB key-value access using `id` as the primary lookup pattern
-- DynamoDB conditional creates and conditional updates for no-overwrite and optimistic-locking behavior
-- Idempotency-key handling for replay-safe create requests and retry ambiguity
-- Input validation with Zod before calling DynamoDB
-- CI quality gates for TypeScript, tests, builds, dependency audit, packaging, and Terraform validation
-- Structured JSON logging for operational debugging
-- Least-privilege thinking for Lambda access to DynamoDB
-- Clear operational trade-offs rather than overstating readiness
-
-Good discussion prompts:
-
-- How would authentication be added with Cognito or JWT authorizers?
-- Where should throttling, access logs, and alarms be configured?
-- When would DynamoDB be a good fit, and when would RDS be better?
-- How should stale updates, deleted records, and retry behavior be represented in an API contract?
-- What failure windows remain when idempotency uses a reservation plus transaction model?
-- How would the Terraform be split for multiple environments?
-- What smoke tests would be valuable after deployment?
-- How would CI evolve into safe deployment automation?
-
-## Future Improvements
-
-Priority improvements:
-
-- Add Cognito, JWT authorizer, IAM auth, or another authorization layer
-- Add API Gateway usage plans, API keys, or WAF if the API needs stronger public abuse controls
-- Add CloudWatch dashboards and tune or expand alarm coverage, such as DynamoDB throttling or per-client API signals
-- Introduce environment separation for `dev`, `staging`, and `prod`
-- Add Terraform remote state and locking
-- Expand ADR coverage for future design changes
-- Wire the smoke test into a controlled post-deployment workflow
-- Add a controlled deployment workflow after validation passes
-- Validate idempotent create behavior and CloudWatch idempotency metrics in a deployed environment
+| Path                 | Purpose                                                      |
+| -------------------- | ------------------------------------------------------------ |
+| `lambdas/`           | TypeScript handlers, shared utilities, validation, and tests |
+| `openapi/`           | OpenAPI contract                                             |
+| `terraform/`         | AWS infrastructure definitions                               |
+| `scripts/`           | Packaging and post-deployment smoke tests                    |
+| `docs/adr/`          | Architecture decision records                                |
+| `docs/operations.md` | Deployment validation and troubleshooting runbook            |
+| `diagram/`           | Architecture diagram                                         |
+| `images/`            | Deployment screenshots                                       |
+| `.github/workflows/` | GitHub Actions CI                                            |
 
 ## Cleanup
 
-To remove deployed AWS resources:
+To remove the deployed AWS resources:
 
 ```bash
 cd terraform
 terraform destroy
 ```
 
-Review the destroy plan before confirming. After cleanup, check for any retained resources or CloudWatch log groups that may need manual review.
+Review the destroy plan before confirming and check for any resources that may have been retained outside the Terraform state.
 
-## Related Reference Hub
-
-This repository is part of a broader AWS architecture reference hub and focuses specifically on the serverless API backend pattern.
-
-Reference hub:
-
-[AWS Architecture Labs](https://github.com/hongzz0618/aws-architecture-labs)
+```

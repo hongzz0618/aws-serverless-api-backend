@@ -65,6 +65,10 @@ jobs:
       - name: Package Lambda functions
         run: bash scripts/package-lambdas.sh
 
+      - name: Verify Lambda artifacts
+        working-directory: lambdas
+        run: npm run artifacts:verify
+
       - name: Upload Lambda packages
         uses: actions/upload-artifact@v4
         with:

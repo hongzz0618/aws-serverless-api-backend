@@ -76,6 +76,14 @@ npm run test:contract
 
 These checks do not require AWS credentials, a deployed API, or network access after dependencies are installed. Live AWS behavior still requires the optional post-deployment smoke test with an explicit `API_URL`.
 
+## Lambda Artifact Assurance
+
+The official Lambda packages are created by `scripts/package-lambdas.sh` and verified by `npm run artifacts:verify` from the `lambdas/` directory. The verification step checks the final ZIP files that Terraform references, not only TypeScript source or `dist/` output.
+
+The verifier confirms that the packaged handler module and exported `handler` function can be loaded, runtime dependencies resolve from inside each extracted artifact, dev-only tooling is absent, and Terraform `filename`, `handler`, `runtime`, and `source_code_hash` wiring matches the generated ZIPs. It also writes a generated `lambdas/artifacts-manifest.json` containing SHA-256 checksums, sizes, handlers, runtimes, and file counts for the final artifacts. The manifest and ZIP files are generated build outputs and remain ignored by Git.
+
+Artifact verification is an integrity check for CI-produced ZIP contents. It does not deploy the Lambda functions, invoke them in AWS, or prove live API behavior.
+
 ### Validation Behavior
 
 Request validation is implemented in the Lambda application layer with Zod.

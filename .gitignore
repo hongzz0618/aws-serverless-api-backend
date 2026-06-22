@@ -44,3 +44,4 @@ node_modules/
 lambdas/dist/
 lambdas/.package-tmp/
 lambdas/.package-prod/
+lambdas/artifacts-manifest.json

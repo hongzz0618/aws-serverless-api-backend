@@ -30,6 +30,13 @@ handlers=(
   "dist/deleteItem.js:deleteItem.zip"
 )
 
+target_packages=(
+  "createItem.zip"
+  "getItem.zip"
+  "updateItem.zip"
+  "deleteItem.zip"
+)
+
 echo "Packaging Lambda functions..."
 echo "Repository root: $repo_root"
 echo "Lambda directory: $lambda_dir"
@@ -63,6 +70,9 @@ if ! command -v zip >/dev/null 2>&1; then
   exit 1
 fi
 
+echo "Removing old Lambda packages..."
+rm -f "${target_packages[@]}"
+
 echo "Installing Lambda dependencies..."
 npm ci
 
@@ -82,8 +92,6 @@ for handler_package in "${handlers[@]}"; do
   fi
 done
 
-echo "Removing old Lambda packages..."
-rm -f createItem.zip getItem.zip updateItem.zip deleteItem.zip
 rm -rf "$package_tmp_dir"
 rm -rf "$package_prod_dir"
 mkdir -p "$package_tmp_dir"
@@ -102,6 +110,11 @@ cp package.json package-lock.json "$package_prod_dir/"
   npm ci --omit=dev
 )
 
+echo "Removing test directories from production dependencies..."
+find "$package_prod_dir/node_modules" \
+  -type d \( -name "__tests__" -o -name "test" -o -name "tests" \) \
+  -prune -exec rm -rf {} +
+
 for handler_package in "${handlers[@]}"; do
   handler="${handler_package%%:*}"
   package="${handler_package##*:}"
@@ -111,12 +124,13 @@ for handler_package in "${handlers[@]}"; do
   rm -rf "$package_tmp_dir"/*
   cp "$handler" "$package_tmp_dir/$handler_file"
   cp -R dist/src "$package_tmp_dir/src"
-  cp package.json package-lock.json "$package_tmp_dir/"
+  node -e 'const fs = require("fs"); const pkg = JSON.parse(fs.readFileSync("package.json", "utf8")); fs.writeFileSync(process.argv[1], `${JSON.stringify({ type: pkg.type, dependencies: pkg.dependencies }, null, 2)}\n`);' "$package_tmp_dir/package.json"
   cp -R "$package_prod_dir/node_modules" "$package_tmp_dir/"
 
   (
     cd "$package_tmp_dir"
-    zip -qr "$lambda_dir/$package" "$handler_file" src package.json package-lock.json node_modules
+    find . -exec touch -t 200001010000.00 {} +
+    find . -type f | sed 's#^\./##' | LC_ALL=C sort | zip -q -X "$lambda_dir/$package" -@
   )
 done
 

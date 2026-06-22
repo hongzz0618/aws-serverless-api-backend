@@ -1,30 +1,63 @@
 # Operations Runbook
 
-This runbook covers basic validation, troubleshooting, and cleanup for the serverless item API reference project.
+This runbook covers post-deployment validation, log inspection, monitoring, troubleshooting, and teardown for the serverless item API.
 
-## Validate After Deployment
+## Post-Deployment Validation
 
-After `terraform apply`, get the deployed API URL:
+After `terraform apply`, retrieve the API URL:
 
 ```bash
 cd terraform
-terraform output api_url
+terraform output -raw api_url
 ```
 
-Use the output value as `<API_URL>`.
+The Terraform configuration creates a `dev` API Gateway stage. The output should end with `/dev`.
 
-Create an item:
+## Recommended Smoke Test
+
+The repository includes a post-deployment smoke test at:
+
+```text
+scripts/smoke-test.mjs
+```
+
+Run it against the deployed API:
 
 ```bash
-curl -X POST "<API_URL>/items" \
-  -H "Content-Type: application/json" \
-  -H "Idempotency-Key: item-create:00000001" \
-  -d '{"name":"Laptop charger"}'
+cd terraform
+API_URL="$(terraform output -raw api_url)"
+
+cd ../lambdas
+API_URL="$API_URL" npm run smoke:test
 ```
 
-Expected result: `201 Created` with a JSON body containing `message`, `id`, and `version: 1`.
+The smoke test verifies:
 
-Replay the same create request with the same key and body:
+* Item creation
+* Idempotent replay using the same key and payload
+* Conflict when the same key is reused with another payload
+* Initial item version
+* Item retrieval
+* Version-based update
+* Read after update
+* Stale-version conflict
+* Item deletion
+* `404 Not Found` after deletion
+* Best-effort cleanup if a later step fails
+
+A successful run ends with:
+
+```text
+[smoke] Passed
+```
+
+The smoke test is not part of the default GitHub Actions workflow because it requires a deployed API URL.
+
+## Manual Idempotency Checks
+
+Use a unique key for each manual test session.
+
+### Create an item
 
 ```bash
 curl -i -X POST "<API_URL>/items" \
@@ -33,232 +66,273 @@ curl -i -X POST "<API_URL>/items" \
   -d '{"name":"Laptop charger"}'
 ```
 
-Expected result: `201 Created`, the same item ID, and `Idempotency-Replayed: true`.
+Expected result:
 
-Reuse the same key with a different body:
+* `201 Created`
+* A JSON response containing `message`, `id`, and `version: 1`
+
+### Replay the same request
+
+Send the same key and the same body:
 
 ```bash
-curl -X POST "<API_URL>/items" \
+curl -i -X POST "<API_URL>/items" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: item-create:00000001" \
+  -d '{"name":"Laptop charger"}'
+```
+
+Expected result:
+
+* `201 Created`
+* The same item ID
+* Response header `Idempotency-Replayed: true`
+
+### Reuse the key with another payload
+
+```bash
+curl -i -X POST "<API_URL>/items" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: item-create:00000001" \
   -d '{"name":"Different item"}'
 ```
 
-Expected result: `409 Conflict` with `{"error":"Idempotency key was already used with a different request"}`.
+Expected result:
 
-Read the item:
-
-```bash
-curl -X GET "<API_URL>/items/<ITEM_ID>"
+```text
+409 Conflict
 ```
 
-Expected result: `200 OK` with the item fields, including `version: 1`.
-
-Update the item:
-
-```bash
-curl -X PUT "<API_URL>/items/<ITEM_ID>" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Laptop charger - spare","version":1}'
+```json
+{
+  "error": "Idempotency key was already used with a different request"
+}
 ```
 
-Expected result: `200 OK` with the updated name and `version: 2`.
-
-Repeat the update with stale version `1`:
-
-```bash
-curl -X PUT "<API_URL>/items/<ITEM_ID>" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Stale update","version":1}'
-```
-
-Expected result: `409 Conflict` with `{"error":"Item version conflict"}`.
-
-Delete the item:
-
-```bash
-curl -X DELETE "<API_URL>/items/<ITEM_ID>"
-```
-
-Expected result: `200 OK` with the deleted item ID.
-
-Read the deleted item:
-
-```bash
-curl -X GET "<API_URL>/items/<ITEM_ID>"
-```
-
-Expected result: `404 Not Found` with `{"error":"Item not found"}`.
-
-## Optional Smoke Test
-
-The repository includes an optional post-deployment helper at `scripts/smoke-test.mjs`. It creates an item with an idempotency key, verifies exact replay, verifies same-key conflict, verifies the initial version, updates it, verifies the incremented version, checks that a stale update returns `409`, deletes the item, verifies a later read returns `404`, and attempts cleanup if a later step fails.
-
-Run it from the `lambdas` directory with `API_URL` set to the Terraform output:
-
-```bash
-cd lambdas
-API_URL="<API_URL>" npm run smoke:test
-```
-
-The smoke test is not part of the default GitHub Actions workflow because it requires a deployed API URL.
+The complete request and response contract is documented in `openapi/openapi.yaml`.
 
 ## Inspect CloudWatch Logs
 
-Lambda handlers emit structured JSON logs. Terraform creates these Lambda log groups:
+Terraform creates one log group for each Lambda function:
 
-- `/aws/lambda/<project_name>-create`
-- `/aws/lambda/<project_name>-get`
-- `/aws/lambda/<project_name>-update`
-- `/aws/lambda/<project_name>-delete`
+* `/aws/lambda/<project_name>-create`
+* `/aws/lambda/<project_name>-get`
+* `/aws/lambda/<project_name>-update`
+* `/aws/lambda/<project_name>-delete`
 
-API Gateway access logs are written to the log group exposed by Terraform:
+API Gateway access logs are written to the log group exposed by:
 
 ```bash
 cd terraform
-terraform output api_access_log_group_name
+terraform output -raw api_access_log_group_name
 ```
 
-Use the AWS console or AWS CLI to inspect recent events. If the AWS CLI is available, the API access log group can be tailed with:
+Tail the API Gateway access logs with the AWS CLI:
 
 ```bash
 aws logs tail "$(terraform output -raw api_access_log_group_name)" --follow
 ```
 
-For Lambda logs, inspect the function-specific log group for the route being tested. Look for `requestId`, `route`, `operation`, `statusCode`, `errorName`, and `errorMessage` fields.
+For Lambda failures, inspect the log group associated with the affected route.
 
-For idempotent create behavior, inspect the create Lambda log group for these stable event values:
+Useful structured fields include:
 
-- `idempotency_reserved`: a new key was reserved.
-- `idempotency_replayed`: a completed key returned the stored original response.
-- `idempotency_conflict`: a key was reused with a different validated payload.
-- `idempotency_in_progress`: a concurrent request found an active reservation.
-- `idempotency_failed`: idempotency storage, completion, or cleanup failed.
+* `timestamp`
+* `level`
+* `message`
+* `service`
+* `requestId`
+* `route`
+* `operation`
+* `statusCode`
+* `itemId`
+* `validationError`
+* `event`
+* `idempotencyKeyHash`
+* `recovered`
+* `errorName`
 
-The logs include `idempotencyKeyHash`, a short correlation hash. They do not include the full idempotency key, request fingerprint, request body, or headers.
+Raw exception messages and stack traces are intentionally not emitted by the application logger.
 
-## Relevant Alarms And Metrics
+## Idempotency Log Events
 
-Terraform exposes configured alarm names:
+The create Lambda emits stable event names for idempotency behavior:
+
+| Event                     | Meaning                                                         |
+| ------------------------- | --------------------------------------------------------------- |
+| `idempotency_reserved`    | A new key was reserved, or an expired reservation was recovered |
+| `idempotency_replayed`    | A completed request returned its stored response                |
+| `idempotency_conflict`    | The key was reused with another validated payload               |
+| `idempotency_in_progress` | A request found an active reservation                           |
+| `idempotency_failed`      | Reservation, completion, inspection, or cleanup failed          |
+
+Logs include a short `idempotencyKeyHash` for correlation.
+
+They do not include:
+
+* The full idempotency key
+* The request fingerprint
+* Request bodies
+* Request headers
+* DynamoDB table names
+
+## Alarms and Metrics
+
+Terraform exposes the configured alarm names:
 
 ```bash
 cd terraform
 terraform output cloudwatch_alarm_names
 ```
 
-Relevant CloudWatch signals:
+Relevant signals include:
 
-- Lambda `Errors` for unhandled invocation or runtime failures in the create, get, update, and delete handlers.
-- Custom handled-500 metrics for caught application failures where a handler logs `level: "error"` with `statusCode: 500` before returning a safe HTTP response.
-- Custom idempotency metrics for create replay, conflict, and idempotency failure log events.
-- Lambda `Throttles` for each handler.
-- API Gateway `4XXError` for validation, not-found, conflict, and other client-side responses.
-- API Gateway `5XXError` as the aggregate HTTP 5XX signal across all routes.
-- API Gateway `Latency` for elevated request duration.
-- DynamoDB `SystemErrors` across `PutItem`, `GetItem`, `UpdateItem`, and `DeleteItem`.
+### Lambda
 
-Replay and conflict counts are useful diagnostics but are not errors by themselves. Replay often means a client retried correctly. Conflict usually means client behavior needs review. Idempotency failure counts should be investigated because they indicate a storage or completion problem.
+* `Errors` for unhandled invocation or runtime failures
+* `Throttles` for each Lambda function
+* Custom handled-500 metrics for failures caught by the application before returning a safe HTTP response
 
-Alarm actions are optional and controlled by the Terraform `alarm_actions` variable. Without actions, alarms still exist but do not notify anyone.
+A caught application error can return HTTP `500` without increasing the Lambda `Errors` metric because the Lambda invocation itself completed normally.
 
-## Common Failure Scenarios
+### API Gateway
 
-Invalid request body returns `400`:
+* `4XXError`
+* `5XXError`
+* `Latency`
 
-- Check that `POST /items` sends valid JSON with a non-empty `name` string of 100 characters or fewer.
-- Check that `PUT /items/{id}` sends valid JSON with a valid `name` and a positive integer `version`.
-- The handler should not call DynamoDB for validation failures.
+The `4XXError` metric includes expected client outcomes such as validation failures, missing records, and version or idempotency conflicts. It should be interpreted together with route logs and traffic volume.
 
-Missing item returns `404`:
+### Idempotency
 
-- Check that the path uses a valid UUID.
-- A valid UUID that is not present in DynamoDB returns `{"error":"Item not found"}`.
-- During an update, if the item is deleted after the initial read but before the conditional update completes, the handler performs a consistent follow-up read and returns `404`.
+Custom log metrics track:
 
-Missing or invalid idempotency key returns `400`:
+* Replayed requests
+* Conflicting key reuse
+* Idempotency failures
 
-- `POST /items` requires `Idempotency-Key`.
-- The key must be 8 to 128 characters and use only letters, digits, hyphen, underscore, colon, or period.
-- Header matching is case-insensitive, but clients should send `Idempotency-Key` for clarity.
+Replay is normally expected retry behavior.
 
-Idempotent create replay returns `201`:
+A conflict usually indicates incorrect client key reuse.
 
-- Same key and same valid request body returns the original create response.
-- The response includes `Idempotency-Replayed: true`.
-- No second item should be created.
+Idempotency failure events should be investigated because they indicate a reservation, storage, transaction, or recovery problem.
 
-Idempotency key conflict returns `409`:
+### DynamoDB
 
-- Same key with a different valid request body returns `{"error":"Idempotency key was already used with a different request"}`.
-- Check create Lambda logs for `event = "idempotency_conflict"` and the short `idempotencyKeyHash`.
+Terraform configures `SystemErrors` monitoring for the item-table operations represented in the current alarm definition.
 
-Idempotency key in progress returns `409`:
+Application-level idempotency failures are also surfaced through the create Lambda logs and custom idempotency metrics.
 
-- Same key and same valid request body can return `{"error":"Request with this idempotency key is already in progress"}` while the first request is still reserved.
-- This should be temporary. Retry later with the same key and same body.
+Alarm notifications are optional and controlled by the Terraform `alarm_actions` variable. Without configured actions, alarms still change state but do not notify a recipient.
 
-Stuck `IN_PROGRESS` idempotency records:
+## Troubleshooting
 
-- The reservation uses a short application lease (`inProgressExpiresAt`) and a separate DynamoDB TTL cleanup timestamp (`expiresAt`).
-- A later same-payload request can conditionally take over an expired `IN_PROGRESS` reservation and reuse the stored item ID.
-- A different payload with the same key still returns `409 Conflict`, even if the old reservation lease has expired.
-- TTL deletion is asynchronous and not immediate, so a stale record may remain visible after expiration.
-- TTL is storage cleanup, not the runtime concurrency-control mechanism.
-- Do not manually delete unknown records in an active environment unless the request is understood and no client can still be relying on that key.
-- In the reference environment, teardown through `terraform destroy` removes the idempotency table with the rest of the stack.
+| Symptom                     | Likely cause                                                                                                       | Checks                                                                                                          |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `400` from `POST /items`    | Missing or invalid idempotency key, invalid JSON, or invalid `name`                                                | Confirm the header is 8–128 valid characters and the body contains a non-empty string of at most 100 characters |
+| `400` from an item route    | Invalid UUID or update body                                                                                        | Confirm the path ID is a UUID and `PUT` includes a positive integer `version`                                   |
+| `404 Item not found`        | The item does not exist or was deleted during an update                                                            | Check the item ID and inspect the route-specific Lambda logs                                                    |
+| `409` from create           | Different payload for the same key, active reservation, or rare item ID collision                                  | Inspect `event`, `idempotencyKeyHash`, and the response message                                                 |
+| `409 Item version conflict` | The submitted update version is stale                                                                              | Read the current item and retry with its latest version                                                         |
+| `500` response              | DynamoDB failure, missing environment configuration, IAM failure, malformed stored data, or another internal error | Correlate `requestId`, `route`, `operation`, `statusCode`, and `errorName`                                      |
+| Alarm has no notification   | `alarm_actions` is empty or invalid                                                                                | Review the Terraform variable and the target SNS or notification configuration                                  |
+| Smoke test cannot connect   | Incorrect API URL, destroyed deployment, region mismatch, or network issue                                         | Confirm `terraform output -raw api_url` and test a direct request                                               |
 
-Ambiguous create transaction outcome:
+## Idempotency Recovery Behavior
 
-- The create transaction uses DynamoDB `ClientRequestToken` for the service's documented short retry window.
-- The idempotency table remains the durable business replay record for the configured retention window.
-- If Lambda receives an uncertain transaction error, the handler reads the idempotency record strongly consistently.
-- If the record is `COMPLETED`, the API returns the stored original `201` response with `Idempotency-Replayed: true`.
-- If the record is still `IN_PROGRESS`, the handler leaves it in place for lease-based recovery rather than deleting it blindly.
+A newly accepted idempotency key is stored as an `IN_PROGRESS` reservation before the item is created.
 
-Duplicate generated item ID returns `409`:
+The reservation contains:
 
-- Item creation uses a DynamoDB conditional write with `attribute_not_exists` on `id`.
-- If DynamoDB reports `ConditionalCheckFailedException`, the API returns `{"error":"Item already exists"}`.
+* The request fingerprint
+* The generated item ID
+* A short correlation hash
+* An application lease timestamp
+* A DynamoDB TTL cleanup timestamp
 
-Stale update returns `409`:
+Important behavior:
 
-- Item updates require the caller to submit the current item `version`.
-- The update handler uses a DynamoDB conditional `UpdateItem` and increments the version after a successful update.
-- If the item still exists but the submitted version is stale, the API returns `{"error":"Item version conflict"}`.
+* A request with the same key and payload receives `409` while the reservation lease is active.
+* A request with another payload receives `409`, even after the original lease expires.
+* A later request with the same key and payload can conditionally recover an expired reservation.
+* Recovery reuses the stored item ID.
+* Only one concurrent recovery attempt can win.
+* DynamoDB TTL cleanup is asynchronous and is not used as the runtime locking mechanism.
 
-Unexpected DynamoDB or internal error returns safe `500`:
+Do not manually delete unknown idempotency records in an active environment unless the related request is understood and no client can still rely on the key.
 
-- Callers receive a generic error such as `{"error":"Failed to create item"}`, `{"error":"Failed to fetch item"}`, `{"error":"Failed to update item"}`, or `{"error":"Failed to delete item"}`.
-- Update-specific `500` responses can come from the initial read, the conditional update, or the follow-up read used to distinguish stale versions from delete races.
-- Check Lambda logs for the internal `errorName` and `errorMessage`.
-- Custom handled-500 metrics identify which Lambda operation returned a caught application-level `500`.
-- API Gateway `5XXError` shows the aggregate HTTP impact. Lambda `Errors` may remain unchanged for caught failures because the invocation completed successfully from the Lambda service perspective.
+## Ambiguous Transaction Outcomes
 
-Missing Lambda environment variables:
+Item creation and idempotency completion are written in one DynamoDB transaction.
 
-- Handlers require `TABLE_NAME`.
-- The create handler also requires `IDEMPOTENCY_TABLE_NAME`.
-- Terraform sets `TABLE_NAME` for all four Lambda functions and `IDEMPOTENCY_TABLE_NAME` for the create function.
-- If it is missing or changed manually, the API returns a safe `500`; Lambda logs include the missing environment variable error.
+The transaction uses a deterministic `ClientRequestToken` for DynamoDB's short transaction-retry window.
 
-## Cleanup And Teardown
+If the handler receives an ambiguous transaction error:
 
-To remove deployed AWS resources:
+1. It performs a strongly consistent read of the idempotency record.
+2. A `COMPLETED` record returns the stored original response.
+3. An unresolved `IN_PROGRESS` record remains available for lease-based recovery.
+4. The handler does not blindly delete an uncertain reservation.
+
+The idempotency table remains the business replay record for the configured retention window. DynamoDB TTL later removes expired records asynchronously.
+
+## Environment Configuration
+
+All four handlers require:
+
+```text
+TABLE_NAME
+```
+
+The create handler also requires:
+
+```text
+IDEMPOTENCY_TABLE_NAME
+```
+
+Terraform configures these values.
+
+If a value is missing or changed manually, the affected route returns a safe `500` response. Verify the Lambda environment configuration in Terraform and in the deployed function.
+
+The application logs expose `errorName`, but intentionally do not expose the raw exception message.
+
+## Cleanup and Teardown
+
+Remove the Terraform-managed resources with:
 
 ```bash
 cd terraform
 terraform destroy
 ```
 
-Review the destroy plan before confirming. After teardown, check for retained resources or CloudWatch log groups that may need manual review.
+Review the destroy plan before confirming.
+
+After teardown:
+
+* Confirm the API Gateway API is gone.
+* Confirm the Lambda functions are gone.
+* Confirm the two DynamoDB tables are gone.
+* Confirm Terraform-managed CloudWatch log groups and alarms were removed.
+* Check for manually created or externally managed resources that were not part of the Terraform state.
 
 ## Known Operational Limitations
 
-- API Gateway routes are unauthenticated.
-- There is no dashboard or log analytics layer.
-- Alarm notifications require optional `alarm_actions`.
-- There is no per-client throttling or usage plan.
-- Terraform uses local state unless an operator configures a backend outside this repository.
-- GitHub Actions validates and packages the project but does not deploy it.
-- The smoke test is optional and is not run automatically in CI.
-- Idempotency behavior and CloudWatch idempotency metrics still require a deployed API to validate end to end.
+* API Gateway routes are unauthenticated.
+* CORS and `OPTIONS` routes are not configured.
+* There is no WAF integration.
+* There is no per-client quota or usage-plan enforcement.
+* There is no distributed tracing.
+* There is no CloudWatch dashboard or dedicated log analytics layer.
+* Alarm notifications require optional `alarm_actions`.
+* Terraform uses local state unless a backend is configured outside this repository.
+* GitHub Actions validates and packages the project but does not deploy it.
+* The post-deployment smoke test is not run automatically in CI.
+* DynamoDB monitoring does not provide dedicated system-error alarms for every idempotency-table and transaction-specific operation.
+* The current idempotency implementation and related CloudWatch metrics still require end-to-end validation against a deployment of the current commit.
+
+## Related Documentation
+
+* [OpenAPI contract](../openapi/openapi.yaml)
+* [ADR 005: Conditional item creation](adr/005-use-conditional-writes-for-item-creation.md)
+* [ADR 006: Optimistic locking](adr/006-use-optimistic-locking-for-item-updates.md)
+* [ADR 007: Idempotency keys](adr/007-use-idempotency-keys-for-item-creation.md)

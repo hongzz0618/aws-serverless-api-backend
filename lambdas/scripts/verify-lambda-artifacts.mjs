@@ -1,14 +1,17 @@
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
 import { createWriteStream, promises as fs } from "node:fs";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import yauzl from "yauzl";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const defaultRepoRoot = resolve(scriptDir, "../..");
 const DEFAULT_MIN_ZIP_BYTES = 10_000;
+const EXPECTED_RUNTIME = "nodejs22.x";
+const execFileAsync = promisify(execFile);
 const SENSITIVE_ENTRY_PATTERNS = [
   /^\.git(?:\/|$)/,
   /(?:^|\/)\.env(?:$|\.)/,
@@ -39,6 +42,12 @@ const assert = (condition, message) => {
 
 const readText = async (path) => fs.readFile(path, "utf8");
 
+const stripCommentOnlyLines = (source) =>
+  source
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*(#|\/\/)/.test(line))
+    .join("\n");
+
 const unique = (values, label) => {
   const seen = new Set();
   const duplicates = [];
@@ -59,7 +68,7 @@ const extractArrayBlock = (source, label) => {
 
 export const parsePackagingScript = async (repoRoot) => {
   const source = await readText(join(repoRoot, "scripts/package-lambdas.sh"));
-  const handlersBlock = extractArrayBlock(source, "handlers");
+  const handlersBlock = stripCommentOnlyLines(extractArrayBlock(source, "handlers"));
   const entries = [...handlersBlock.matchAll(/"([^":]+):([^"]+)"/g)].map((match) => ({
     compiledHandler: match[1],
     zipFilename: match[2],
@@ -109,7 +118,7 @@ const terraformZipBasename = (value) => {
 };
 
 export const parseTerraformLambdas = async (repoRoot) => {
-  const source = await readText(join(repoRoot, "terraform/main.tf"));
+  const source = stripCommentOnlyLines(await readText(join(repoRoot, "terraform/main.tf")));
   const lambdas = extractTerraformBlocks(source, "aws_lambda_function").map((block) => {
     const handler = unquote(terraformAttr(block.body, "handler"));
     const runtime = unquote(terraformAttr(block.body, "runtime"));
@@ -120,6 +129,10 @@ export const parseTerraformLambdas = async (repoRoot) => {
 
     assert(handler, `Terraform lambda ${block.name} is missing handler`);
     assert(runtime, `Terraform lambda ${block.name} is missing runtime`);
+    assert(
+      runtime === EXPECTED_RUNTIME,
+      `Terraform lambda ${block.name} runtime ${runtime} does not match ${EXPECTED_RUNTIME}`
+    );
     assert(zipFilename, `Terraform lambda ${block.name} has unsupported filename: ${filenameRaw}`);
     assert(hashZip, `Terraform lambda ${block.name} is missing supported source_code_hash`);
     assert(
@@ -256,17 +269,6 @@ const verifyNoForbiddenEntries = (entries, devDependencies) => {
   }
 };
 
-const verifyDependencyResolution = (extractDir, runtimeDependencies) => {
-  const requireFromArtifact = createRequire(join(extractDir, "package.json"));
-  for (const dependency of runtimeDependencies) {
-    try {
-      requireFromArtifact.resolve(dependency);
-    } catch {
-      fail(`Runtime dependency cannot be resolved from artifact: ${dependency}`);
-    }
-  }
-};
-
 const verifyRuntimePackageMetadata = async (extractDir) => {
   const artifactPackage = JSON.parse(await readText(join(extractDir, "package.json")));
   assert(
@@ -275,19 +277,33 @@ const verifyRuntimePackageMetadata = async (extractDir) => {
   );
 };
 
-const importHandler = async (extractDir, lambda) => {
-  const modulePath = join(extractDir, lambda.handlerModule);
-  let module;
-  try {
-    module = await import(`${pathToFileURL(modulePath).href}?artifactVerify=${Date.now()}`);
-  } catch (error) {
-    fail(`Could not import handler module ${lambda.handlerModule}: ${error.message}`);
-  }
+const verifyRuntimeLoadInChildProcess = async (extractDir, lambda, runtimeDependencies) => {
+  const moduleUrl = pathToFileURL(join(extractDir, lambda.handlerModule)).href;
+  const probe = `
+    import { createRequire } from "node:module";
+    const requireFromArtifact = createRequire(new URL("./package.json", import.meta.url));
+    const runtimeDependencies = JSON.parse(process.argv[1]);
+    for (const dependency of runtimeDependencies) {
+      requireFromArtifact.resolve(dependency);
+    }
+    const module = await import(${JSON.stringify(moduleUrl)});
+    if (typeof module[${JSON.stringify(lambda.handlerExport)}] !== "function") {
+      throw new Error("Handler export is not a function");
+    }
+  `;
 
-  assert(
-    typeof module[lambda.handlerExport] === "function",
-    `Handler export ${lambda.terraformHandler} is not a function`
-  );
+  try {
+    const env = { ...process.env };
+    delete env.NODE_PATH;
+    await execFileAsync(process.execPath, ["--input-type=module", "--eval", probe, JSON.stringify(runtimeDependencies)], {
+      cwd: extractDir,
+      env,
+      windowsHide: true,
+      timeout: 10_000,
+    });
+  } catch (error) {
+    fail(`Could not load handler module ${lambda.handlerModule} from artifact: ${error.message}`);
+  }
 };
 
 export const verifyManifestMatches = async (manifestPath, actualArtifacts) => {
@@ -387,9 +403,8 @@ export const verifyLambdaArtifacts = async ({
         fail(`Could not extract ${lambda.zipFilename}: ${error.message}`);
       }
 
-      verifyDependencyResolution(extractDir, runtimeDependencies);
       await verifyRuntimePackageMetadata(extractDir);
-      await importHandler(extractDir, lambda);
+      await verifyRuntimeLoadInChildProcess(extractDir, lambda, runtimeDependencies);
 
       manifestArtifacts.push({
         artifact: lambda.zipFilename,

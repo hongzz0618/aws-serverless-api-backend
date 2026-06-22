@@ -1,7 +1,7 @@
 import { createWriteStream } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, delimiter } from "node:path";
 import yazl from "yazl";
 import { describe, expect, it } from "vitest";
 
@@ -29,6 +29,10 @@ interface FixtureOptions {
   zipName?: string;
   terraformZipName?: string;
   terraformHandler?: string;
+  terraformRuntime?: string;
+  terraformFilenameExpression?: string;
+  terraformPrefix?: string;
+  packagingPrefix?: string;
   zipEntries?: Record<string, string>;
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
@@ -40,6 +44,10 @@ const createFixtureRepo = async ({
   zipName = "createItem.zip",
   terraformZipName = zipName,
   terraformHandler = "createItem.handler",
+  terraformRuntime = "nodejs22.x",
+  terraformFilenameExpression = `"\${path.module}/../lambdas/${terraformZipName}"`,
+  terraformPrefix = "",
+  packagingPrefix = "",
   zipEntries,
   dependencies = {},
   devDependencies = {},
@@ -54,14 +62,14 @@ const createFixtureRepo = async ({
 
   await writeFile(
     join(repoRoot, "scripts/package-lambdas.sh"),
-    `handlers=(\n  "dist/createItem.js:${zipName}"\n)\n`
+    `handlers=(\n${packagingPrefix}  "dist/createItem.js:${zipName}"\n)\n`
   );
   await writeFile(
     join(repoRoot, "terraform/main.tf"),
-    `resource "aws_lambda_function" "create_item" {
+    `${terraformPrefix}resource "aws_lambda_function" "create_item" {
   handler       = "${terraformHandler}"
-  runtime       = "nodejs22.x"
-  filename         = "\${path.module}/../lambdas/${terraformZipName}"
+  runtime       = "${terraformRuntime}"
+  filename         = ${terraformFilenameExpression}
   source_code_hash = filebase64sha256("\${path.module}/../lambdas/${terraformZipName}")
 }
 `
@@ -132,8 +140,29 @@ describe("Lambda artifact verifier failure modes", () => {
   it("fails when a runtime dependency cannot resolve", async () => {
     await expectVerificationFails(
       await createFixtureRepo({ dependencies: { zod: "4.4.3" } }),
-      /Runtime dependency cannot be resolved/
+      /Could not load handler module/
     );
+  });
+
+  it("does not resolve missing runtime dependencies from NODE_PATH", async () => {
+    const fixture = await createFixtureRepo({ dependencies: { zod: "4.4.3" } });
+    const hostModules = await mkdtemp(join(tmpdir(), "artifact-host-node-path-"));
+    await mkdir(join(hostModules, "node_modules/zod"), { recursive: true });
+    await writeFile(join(hostModules, "node_modules/zod/package.json"), "{}");
+    await writeFile(join(hostModules, "node_modules/zod/index.js"), "module.exports = {};");
+    const originalNodePath = process.env.NODE_PATH;
+    process.env.NODE_PATH = originalNodePath
+      ? `${join(hostModules, "node_modules")}${delimiter}${originalNodePath}`
+      : join(hostModules, "node_modules");
+    try {
+      await expectVerificationFails(fixture, /Could not load handler module/);
+    } finally {
+      if (originalNodePath === undefined) {
+        delete process.env.NODE_PATH;
+      } else {
+        process.env.NODE_PATH = originalNodePath;
+      }
+    }
   });
 
   it("fails when a forbidden dev dependency is packaged", async () => {
@@ -186,6 +215,41 @@ describe("Lambda artifact verifier failure modes", () => {
     await expectVerificationFails(
       await createFixtureRepo({ terraformHandler: "other.handler" }),
       /does not match packaging handler/
+    );
+  });
+
+  it("ignores commented Terraform and packaging declarations", async () => {
+    const { verifyLambdaArtifacts } = await importVerifier();
+    await expect(
+      verifyLambdaArtifacts({
+        ...(await createFixtureRepo({
+          terraformPrefix: `# resource "aws_lambda_function" "fake" {
+#   handler = "fake.handler"
+#   runtime = "nodejs22.x"
+#   filename = "\${path.module}/../lambdas/fake.zip"
+#   source_code_hash = filebase64sha256("\${path.module}/../lambdas/fake.zip")
+# }
+`,
+          packagingPrefix: `  # "dist/fake.js:fake.zip"\n`,
+        })),
+        minZipBytes: 1,
+      })
+    ).resolves.toBeDefined();
+  });
+
+  it("fails closed for unsupported Terraform filename expressions", async () => {
+    await expectVerificationFails(
+      await createFixtureRepo({
+        terraformFilenameExpression: "var.lambda_zip",
+      }),
+      /unsupported filename/
+    );
+  });
+
+  it("fails when Terraform runtime differs from Lambda runtime", async () => {
+    await expectVerificationFails(
+      await createFixtureRepo({ terraformRuntime: "nodejs20.x" }),
+      /runtime nodejs20.x does not match nodejs22.x/
     );
   });
 });

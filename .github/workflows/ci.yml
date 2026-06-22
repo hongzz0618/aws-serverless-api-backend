@@ -78,7 +78,9 @@ jobs:
             lambdas/getItem.zip
             lambdas/updateItem.zip
             lambdas/deleteItem.zip
+            lambdas/artifacts-manifest.json
           if-no-files-found: error
+          retention-days: 7
 
   terraform-checks:
     name: Terraform checks

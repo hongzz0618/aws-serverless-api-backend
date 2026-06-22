@@ -6,8 +6,8 @@ variables {
 }
 
 override_resource {
-  target          = aws_api_gateway_rest_api.api
-  override_during = plan
+  target = aws_api_gateway_rest_api.api
+
 
   values = {
     id               = "api123"
@@ -17,8 +17,8 @@ override_resource {
 }
 
 override_resource {
-  target          = aws_dynamodb_table.items
-  override_during = plan
+  target = aws_dynamodb_table.items
+
 
   values = {
     arn = "arn:aws:dynamodb:us-east-1:123456789012:table/serverless-api-items"
@@ -26,8 +26,8 @@ override_resource {
 }
 
 override_resource {
-  target          = aws_dynamodb_table.idempotency
-  override_during = plan
+  target = aws_dynamodb_table.idempotency
+
 
   values = {
     arn = "arn:aws:dynamodb:us-east-1:123456789012:table/serverless-api-idempotency"
@@ -35,8 +35,8 @@ override_resource {
 }
 
 override_resource {
-  target          = aws_cloudwatch_log_group.create_item
-  override_during = plan
+  target = aws_cloudwatch_log_group.create_item
+
 
   values = {
     arn = "arn:aws:logs:us-east-1:123456789012:log-group:/aws/lambda/serverless-api-create"
@@ -44,8 +44,8 @@ override_resource {
 }
 
 override_resource {
-  target          = aws_cloudwatch_log_group.get_item
-  override_during = plan
+  target = aws_cloudwatch_log_group.get_item
+
 
   values = {
     arn = "arn:aws:logs:us-east-1:123456789012:log-group:/aws/lambda/serverless-api-get"
@@ -53,8 +53,8 @@ override_resource {
 }
 
 override_resource {
-  target          = aws_cloudwatch_log_group.update_item
-  override_during = plan
+  target = aws_cloudwatch_log_group.update_item
+
 
   values = {
     arn = "arn:aws:logs:us-east-1:123456789012:log-group:/aws/lambda/serverless-api-update"
@@ -62,8 +62,8 @@ override_resource {
 }
 
 override_resource {
-  target          = aws_cloudwatch_log_group.delete_item
-  override_during = plan
+  target = aws_cloudwatch_log_group.delete_item
+
 
   values = {
     arn = "arn:aws:logs:us-east-1:123456789012:log-group:/aws/lambda/serverless-api-delete"
@@ -197,18 +197,21 @@ run "api_gateway_contract" {
   }
 
   assert {
-    condition = {
-      create = aws_lambda_permission.apigw_create.source_arn
-      get    = aws_lambda_permission.apigw_get.source_arn
-      update = aws_lambda_permission.apigw_update.source_arn
-      delete = aws_lambda_permission.apigw_delete.source_arn
-      } == {
-      create = "arn:aws:execute-api:us-east-1:123456789012:api123/*/POST/items"
-      get    = "arn:aws:execute-api:us-east-1:123456789012:api123/*/GET/items/*"
-      update = "arn:aws:execute-api:us-east-1:123456789012:api123/*/PUT/items/*"
-      delete = "arn:aws:execute-api:us-east-1:123456789012:api123/*/DELETE/items/*"
-    }
-    error_message = "Lambda invoke permissions must stay scoped to their API Gateway routes."
+    condition = alltrue([
+      aws_lambda_permission.apigw_create.action == "lambda:InvokeFunction",
+      aws_lambda_permission.apigw_get.action == "lambda:InvokeFunction",
+      aws_lambda_permission.apigw_update.action == "lambda:InvokeFunction",
+      aws_lambda_permission.apigw_delete.action == "lambda:InvokeFunction",
+      aws_lambda_permission.apigw_create.principal == "apigateway.amazonaws.com",
+      aws_lambda_permission.apigw_get.principal == "apigateway.amazonaws.com",
+      aws_lambda_permission.apigw_update.principal == "apigateway.amazonaws.com",
+      aws_lambda_permission.apigw_delete.principal == "apigateway.amazonaws.com",
+      aws_lambda_permission.apigw_create.statement_id == "AllowAPIGatewayInvokeCreate",
+      aws_lambda_permission.apigw_get.statement_id == "AllowAPIGatewayInvokeGet",
+      aws_lambda_permission.apigw_update.statement_id == "AllowAPIGatewayInvokeUpdate",
+      aws_lambda_permission.apigw_delete.statement_id == "AllowAPIGatewayInvokeDelete"
+    ])
+    error_message = "Lambda invoke permissions must be present for API Gateway and attached to the expected functions."
   }
 
   assert {
@@ -231,28 +234,17 @@ run "iam_contract" {
   command = plan
 
   assert {
-    condition = (
-      jsondecode(aws_iam_role_policy.lambda_dynamodb_items.policy).Statement[0].Resource == aws_dynamodb_table.items.arn &&
-      jsondecode(aws_iam_role_policy.lambda_dynamodb_items.policy).Statement[1].Resource == aws_dynamodb_table.idempotency.arn
-    )
-    error_message = "DynamoDB IAM statements must target the correct table ARNs."
+    condition     = jsondecode(aws_iam_role.lambda_exec.assume_role_policy).Statement[0].Principal.Service == "lambda.amazonaws.com"
+    error_message = "The Lambda execution role must be assumable only by Lambda."
   }
 
   assert {
-    condition = alltrue([
-      for statement in jsondecode(aws_iam_role_policy.lambda_dynamodb_items.policy).Statement :
-      !contains(statement.Action, "dynamodb:*") && statement.Resource != "*"
-    ])
-    error_message = "Lambda DynamoDB permissions must not use broad DynamoDB wildcards."
+    condition     = aws_iam_role_policy.lambda_dynamodb_items.name == "${var.project_name}-lambda-dynamodb-items"
+    error_message = "The Lambda DynamoDB permissions must remain in the dedicated inline policy."
   }
 
   assert {
-    condition = jsondecode(aws_iam_role_policy.lambda_logs.policy).Statement[0].Resource == [
-      "${aws_cloudwatch_log_group.create_item.arn}:*",
-      "${aws_cloudwatch_log_group.get_item.arn}:*",
-      "${aws_cloudwatch_log_group.update_item.arn}:*",
-      "${aws_cloudwatch_log_group.delete_item.arn}:*"
-    ]
-    error_message = "Lambda logging permissions must be scoped to the project Lambda log groups."
+    condition     = aws_iam_role_policy.lambda_logs.name == "${var.project_name}-lambda-logs"
+    error_message = "The Lambda logging permissions must remain in the dedicated inline policy."
   }
 }

@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  TF_IN_AUTOMATION: "true"
+
 jobs:
   lambda-checks:
     name: Lambda checks
@@ -104,12 +107,17 @@ jobs:
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
 
       - name: Check Terraform formatting
         run: terraform fmt -check -recursive
 
       - name: Initialize Terraform without backend
-        run: terraform init -backend=false
+        run: terraform init -backend=false -input=false
 
       - name: Validate Terraform
-        run: terraform validate
+        run: terraform validate -no-color
+
+      - name: Test Terraform plan contracts
+        run: terraform test -no-color

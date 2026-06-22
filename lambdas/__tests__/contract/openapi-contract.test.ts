@@ -65,8 +65,7 @@ const attr = (body: string, name: string): string | undefined =>
 const unquote = (value: string | undefined): string | undefined =>
   value?.replace(/^"|"$/g, "");
 
-const terraformRoutes = (): Array<{ method: string; path: string }> => {
-  const source = readFileSync(terraformPath, "utf8");
+const terraformRoutesFromSource = (source: string): Array<{ method: string; path: string }> => {
   const resources = new Map<string, { pathPart: string | undefined; parentRef: string | undefined }>();
 
   for (const block of extractBlocks(source, "aws_api_gateway_resource")) {
@@ -122,10 +121,15 @@ const terraformRoutes = (): Array<{ method: string; path: string }> => {
   return routes.sort((a, b) => routeKey(a).localeCompare(routeKey(b)));
 };
 
-const openApiRoutes = (): Array<{ method: string; path: string }> => {
+const terraformRoutes = (): Array<{ method: string; path: string }> =>
+  terraformRoutesFromSource(readFileSync(terraformPath, "utf8"));
+
+const openApiRoutesFromSpec = (
+  document: Pick<OpenApiDocument, "paths">
+): Array<{ method: string; path: string }> => {
   const routes: Array<{ method: string; path: string }> = [];
 
-  for (const [path, pathItem] of Object.entries(spec.paths)) {
+  for (const [path, pathItem] of Object.entries(document.paths)) {
     for (const [method, operation] of Object.entries(pathItem)) {
       if (httpMethods.has(method)) {
         expect(operation.responses).toBeDefined();
@@ -138,6 +142,9 @@ const openApiRoutes = (): Array<{ method: string; path: string }> => {
   expect(new Set(keys).size).toBe(keys.length);
   return routes.sort((a, b) => routeKey(a).localeCompare(routeKey(b)));
 };
+
+const openApiRoutes = (): Array<{ method: string; path: string }> =>
+  openApiRoutesFromSpec(spec);
 
 const operationIds = (): string[] => {
   const ids: string[] = [];
@@ -185,6 +192,73 @@ describe("Terraform route parity", () => {
   it("matches OpenAPI method/path pairs and path parameter names", () => {
     expect(openApiRoutes().map(routeKey)).toEqual(terraformRoutes().map(routeKey));
   });
+
+  it("fails closed for duplicate or unsupported Terraform route declarations", () => {
+    const duplicateRoutes = `
+resource "aws_api_gateway_resource" "items" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  parent_id   = aws_api_gateway_rest_api.api.root_resource_id
+  path_part   = "items"
+}
+
+resource "aws_api_gateway_method" "post_items" {
+  rest_api_id   = aws_api_gateway_rest_api.api.id
+  resource_id   = aws_api_gateway_resource.items.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_method" "post_items_duplicate" {
+  rest_api_id   = aws_api_gateway_rest_api.api.id
+  resource_id   = aws_api_gateway_resource.items.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+`;
+    const unsupportedParent = `
+resource "aws_api_gateway_resource" "items" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  parent_id   = local.unsupported_parent_id
+  path_part   = "items"
+}
+
+resource "aws_api_gateway_method" "post_items" {
+  rest_api_id   = aws_api_gateway_rest_api.api.id
+  resource_id   = aws_api_gateway_resource.items.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+`;
+
+    expect(() => terraformRoutesFromSource(duplicateRoutes)).toThrow();
+    expect(() => terraformRoutesFromSource(unsupportedParent)).toThrow(
+      /Unsupported parent_id/
+    );
+  });
+
+  it("detects OpenAPI route extras and path parameter name mismatches", () => {
+    const terraformKeys = terraformRoutes().map(routeKey);
+    const withExtraRoute = openApiRoutesFromSpec({
+      paths: {
+        ...spec.paths,
+        "/health": {
+          get: {
+            operationId: "health",
+            responses: { "200": { description: "ok" } },
+          },
+        },
+      },
+    }).map(routeKey);
+    const withMismatchedPathParameter = openApiRoutesFromSpec({
+      paths: {
+        "/items": spec.paths["/items"],
+        "/items/{itemId}": spec.paths["/items/{id}"],
+      },
+    }).map(routeKey);
+
+    expect(withExtraRoute).not.toEqual(terraformKeys);
+    expect(withMismatchedPathParameter).not.toEqual(terraformKeys);
+  });
 });
 
 describe("required request contract", () => {
@@ -209,6 +283,7 @@ describe("required request contract", () => {
     const createBody = spec.components.schemas.CreateItemRequest;
     expect(createBody.required).toEqual(["name"]);
     expect(createBody.properties.name.maxLength).toBe(ITEM_NAME_MAX_LENGTH);
+    expect(createBody.additionalProperties).toBe(true);
 
     const update = spec.paths["/items/{id}"].put;
     expect(update.requestBody.required).toBe(true);
@@ -216,6 +291,7 @@ describe("required request contract", () => {
 
     const updateBody = spec.components.schemas.UpdateItemRequest;
     expect(updateBody.required).toEqual(["name", "version"]);
+    expect(updateBody.additionalProperties).toBe(true);
     expect(updateBody.properties.version).toEqual(
       expect.objectContaining({ type: "integer", minimum: 1 })
     );
@@ -253,6 +329,11 @@ describe("error consistency", () => {
             expect(validateError(example)).toBe(true);
             expect(Object.keys(example)).toEqual(["error"]);
           }
+
+          expect(validateError({ error: "Item not found", tableName: "items-table" })).toBe(
+            false
+          );
+          expect(validateError({ error: 123 })).toBe(false);
         }
       }
     }

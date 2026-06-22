@@ -186,12 +186,23 @@ assert(
   spec.components?.schemas?.UpdateItemRequest?.required?.includes("version"),
   "UpdateItemRequest must require version"
 );
+assert(
+  spec.components?.schemas?.CreateItemRequest?.additionalProperties === true,
+  "CreateItemRequest must allow additional properties because runtime validation strips unknown fields"
+);
+assert(
+  spec.components?.schemas?.UpdateItemRequest?.additionalProperties === true,
+  "UpdateItemRequest must allow additional properties because runtime validation strips unknown fields"
+);
 assert(spec.paths["/items/{id}"]?.put?.responses?.["409"], "PUT /items/{id} must document version conflict");
 assert(!spec.paths["/items/{id}"]?.delete?.requestBody, "DELETE /items/{id} must not define a request body");
 
 const serializedSpec = readFileSync(openApiPath, "utf8");
-assert(!/https:\/\/[a-z0-9-]+\.execute-api\.[a-z0-9-]+\.amazonaws\.com\/(?!dev\b)/i.test(serializedSpec), "OpenAPI must not contain a real deployed API endpoint");
-assert(!serializedSpec.includes("amazonaws.com/prod"), "OpenAPI must not contain a real production endpoint");
+const serverUrls = spec.servers?.map((server) => server.url) ?? [];
+assert(
+  serverUrls.every((url) => url === "https://example.execute-api.region.amazonaws.com/dev"),
+  "OpenAPI server URLs must use the neutral placeholder endpoint"
+);
 
 const ci = readFileSync(ciPath, "utf8");
 assert(ci.includes("npm run contract:validate"), "CI must run npm run contract:validate");

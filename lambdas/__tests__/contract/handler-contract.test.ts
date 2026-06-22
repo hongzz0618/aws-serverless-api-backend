@@ -241,6 +241,22 @@ describe("handler response contract", () => {
     expectBodyMatches(result, "put", "/items/{id}");
   });
 
+  it("validates delete success response body", async () => {
+    dynamoMock.send.mockResolvedValueOnce({
+      Attributes: {
+        id: { S: TEST_ITEM_ID },
+      },
+    });
+    const { handler } = await import("../../deleteItem.js");
+
+    const result = await handler(apiEvent({ pathParameters: { id: TEST_ITEM_ID } }));
+
+    expect(result.statusCode).toBe(200);
+    expectJsonHeader(result);
+    expect(body(result)).toEqual({ message: "Item deleted", id: TEST_ITEM_ID });
+    expectBodyMatches(result, "delete", "/items/{id}");
+  });
+
   it("validates internal error responses without internal fields", async () => {
     dynamoMock.send.mockRejectedValueOnce(new Error("DynamoDB failure"));
     const { handler } = await import("../../deleteItem.js");

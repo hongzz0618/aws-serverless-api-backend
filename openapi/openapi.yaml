@@ -245,7 +245,7 @@ components:
   schemas:
     CreateItemRequest:
       type: object
-      additionalProperties: false
+      additionalProperties: true
       required:
         - name
       properties:
@@ -258,7 +258,7 @@ components:
         name: Laptop charger
     UpdateItemRequest:
       type: object
-      additionalProperties: false
+      additionalProperties: true
       required:
         - name
         - version

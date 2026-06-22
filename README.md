@@ -2,7 +2,7 @@
 
 A TypeScript REST API on AWS using API Gateway, four Lambda functions, DynamoDB, Terraform, and GitHub Actions.
 
-The project focuses on retry-safe writes, optimistic concurrency control, API contract validation, observability, scoped permissions, and reproducible Lambda deployment artifacts.
+The project focuses on retry-safe writes, optimistic concurrency control, API contract validation, observability, scoped permissions, reproducible Lambda deployment artifacts, and plan-level infrastructure checks.
 
 ## Highlights
 
@@ -13,6 +13,7 @@ The project focuses on retry-safe writes, optimistic concurrency control, API co
 - OpenAPI checks against Terraform routes and Lambda responses
 - Structured logs, metrics, alarms, and API Gateway access logs
 - Terraform-managed infrastructure and verified Lambda ZIP artifacts
+- Native Terraform plan tests for core infrastructure contracts
 
 ## Architecture
 
@@ -40,7 +41,7 @@ flowchart TB
 
 The Create Lambda uses both DynamoDB tables to coordinate item creation and response replay. The other handlers access the items table only.
 
-Terraform provisions the AWS resources and permissions. GitHub Actions validates and packages the project but does not deploy it.
+Terraform provisions the AWS resources and permissions. GitHub Actions validates, tests, and packages the project but does not deploy it.
 
 ## API
 
@@ -122,21 +123,32 @@ npm run artifacts:verify
 
 The verifier checks ZIP safety, handler exports, production dependencies, Node.js runtime configuration, Terraform wiring, and source hashes.
 
-GitHub Actions also runs Terraform formatting and validation.
+Run the infrastructure checks from `terraform/` after the Lambda ZIPs have been packaged:
+
+```bash
+terraform fmt -check -recursive
+terraform init -backend=false -input=false
+terraform validate -no-color
+terraform test -no-color
+```
+
+The native Terraform tests exercise planned DynamoDB, Lambda, API Gateway, invocation-permission, and IAM contracts without creating AWS resources.
+
+GitHub Actions runs the same application, artifact, and Terraform checks with read-only repository permissions and no AWS credentials.
 
 ## Deployment
 
 ### Prerequisites
 
 - AWS credentials
-- Terraform `>= 1.5.0`
+- Terraform `>= 1.7.0`
 - Node.js 22 and npm
 - Bash-compatible shell
 - `zip` available on `PATH`
 
 ### Apply
 
-Run the application, packaging, and artifact checks first, then:
+Run the application, packaging, artifact, and infrastructure checks first, then:
 
 ```bash
 cd terraform
@@ -146,7 +158,9 @@ cp terraform.tfvars.example terraform.tfvars
 
 terraform fmt -check -recursive
 terraform init
-terraform validate
+terraform validate -no-color
+terraform test -no-color
+terraform plan
 terraform apply
 ```
 
@@ -193,7 +207,7 @@ The API does not implement authentication, authorization, CORS, WAF protection, 
 
 ## Earlier Deployment Evidence
 
-These screenshots document an earlier deployment baseline. The current idempotency, contract-validation, artifact-verification, and observability changes have not yet been validated together in a new AWS deployment.
+These screenshots document an earlier deployment baseline. The current idempotency, contract-validation, artifact-verification, observability, and Terraform plan-test changes have not yet been validated together in a new AWS deployment.
 
 <details>
 <summary>View deployment screenshots</summary>
@@ -210,7 +224,7 @@ These screenshots document an earlier deployment baseline. The current idempoten
 
 - Terraform uses local state unless another backend is configured
 - There is no separate `dev`, `staging`, and `prod` environment structure
-- CI validates and packages the project but does not deploy it
+- CI validates, tests, and packages the project but does not deploy it
 - Alarm notifications require configured `alarm_actions`
 - There is no CloudWatch dashboard or distributed tracing
 - DynamoDB access is focused on lookup by item ID

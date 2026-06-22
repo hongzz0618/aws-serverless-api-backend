@@ -49,11 +49,6 @@ resource "aws_iam_role" "lambda_exec" {
   })
 }
 
-resource "aws_iam_role_policy_attachment" "lambda_basic" {
-  role       = aws_iam_role.lambda_exec.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-}
-
 resource "aws_iam_role_policy" "lambda_dynamodb_items" {
   name = "${var.project_name}-lambda-dynamodb-items"
   role = aws_iam_role.lambda_exec.id
@@ -64,7 +59,6 @@ resource "aws_iam_role_policy" "lambda_dynamodb_items" {
       {
         Effect = "Allow"
         Action = [
-          "dynamodb:PutItem",
           "dynamodb:GetItem",
           "dynamodb:UpdateItem",
           "dynamodb:DeleteItem",
@@ -82,6 +76,30 @@ resource "aws_iam_role_policy" "lambda_dynamodb_items" {
           "dynamodb:TransactWriteItems"
         ]
         Resource = aws_dynamodb_table.idempotency.arn
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "lambda_logs" {
+  name = "${var.project_name}-lambda-logs"
+  role = aws_iam_role.lambda_exec.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = [
+          "${aws_cloudwatch_log_group.create_item.arn}:*",
+          "${aws_cloudwatch_log_group.get_item.arn}:*",
+          "${aws_cloudwatch_log_group.update_item.arn}:*",
+          "${aws_cloudwatch_log_group.delete_item.arn}:*"
+        ]
       }
     ]
   })
@@ -213,13 +231,34 @@ resource "aws_iam_role" "api_gateway_cloudwatch" {
   })
 }
 
-resource "aws_iam_role_policy_attachment" "api_gateway_cloudwatch" {
-  role       = aws_iam_role.api_gateway_cloudwatch.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
+resource "aws_iam_role_policy" "api_gateway_cloudwatch_logs" {
+  name = "${var.project_name}-apigw-cloudwatch-logs"
+  role = aws_iam_role.api_gateway_cloudwatch.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:DescribeLogGroups",
+          "logs:DescribeLogStreams",
+          "logs:PutLogEvents",
+          "logs:GetLogEvents",
+          "logs:FilterLogEvents"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
 }
 
 resource "aws_api_gateway_account" "account" {
   cloudwatch_role_arn = aws_iam_role.api_gateway_cloudwatch.arn
+
+  depends_on = [aws_iam_role_policy.api_gateway_cloudwatch_logs]
 }
 
 # /items

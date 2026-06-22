@@ -7,6 +7,27 @@ const repoRoot = join(process.cwd(), "..");
 const readRepoFile = (path: string): string =>
   readFileSync(join(repoRoot, path), "utf8");
 
+const resourceBlock = (source: string, type: string, name: string): string => {
+  const start = source.indexOf(`resource "${type}" "${name}"`);
+  expect(start).toBeGreaterThanOrEqual(0);
+
+  const open = source.indexOf("{", start);
+  let depth = 0;
+  for (let index = open; index < source.length; index += 1) {
+    if (source[index] === "{") {
+      depth += 1;
+    }
+    if (source[index] === "}") {
+      depth -= 1;
+    }
+    if (depth === 0) {
+      return source.slice(start, index + 1);
+    }
+  }
+
+  throw new Error(`Could not parse ${type}.${name}`);
+};
+
 describe("terraform idempotency configuration", () => {
   const main = readRepoFile("terraform/main.tf");
   const outputs = readRepoFile("terraform/outputs.tf");
@@ -31,11 +52,13 @@ describe("terraform idempotency configuration", () => {
   });
 
   it("keeps DynamoDB IAM actions and resources scoped without wildcards", () => {
+    const dynamodbPolicy = resourceBlock(main, "aws_iam_role_policy", "lambda_dynamodb_items");
     expect(main).toContain("aws_dynamodb_table.items.arn");
     expect(main).toContain("aws_dynamodb_table.idempotency.arn");
-    expect(main).toContain('"dynamodb:TransactWriteItems"');
-    expect(main).not.toContain('"dynamodb:*"');
-    expect(main).not.toMatch(/Resource\s*=\s*"\*"/);
+    expect(dynamodbPolicy).toContain('"dynamodb:TransactWriteItems"');
+    expect(dynamodbPolicy).not.toContain('"dynamodb:*"');
+    expect(dynamodbPolicy).not.toMatch(/Action\s*=\s*"\*"/);
+    expect(dynamodbPolicy).not.toMatch(/Resource\s*=\s*"\*"/);
   });
 
   it("exposes idempotency metrics without adding replay or conflict alarms", () => {
@@ -45,5 +68,50 @@ describe("terraform idempotency configuration", () => {
     expect(main).toContain('pattern        = "\\"${each.value.event}\\""');
     expect(main).not.toContain('$.event = "${each.value.event}"');
     expect(outputs).not.toContain("idempotency_replayed");
+  });
+});
+
+describe("terraform pre-deployment security boundaries", () => {
+  const main = readRepoFile("terraform/main.tf");
+
+  it("uses inline scoped Lambda logging permissions instead of broad managed logging policy", () => {
+    const lambdaLogsPolicy = resourceBlock(main, "aws_iam_role_policy", "lambda_logs");
+
+    expect(main).not.toContain("AWSLambdaBasicExecutionRole");
+    expect(lambdaLogsPolicy).toContain('"logs:CreateLogStream"');
+    expect(lambdaLogsPolicy).toContain('"logs:PutLogEvents"');
+    expect(lambdaLogsPolicy).not.toContain('"logs:CreateLogGroup"');
+    expect(lambdaLogsPolicy).not.toContain('"logs:*"');
+    expect(lambdaLogsPolicy).not.toMatch(/Resource\s*=\s*"\*"/);
+    expect(lambdaLogsPolicy).toContain("${aws_cloudwatch_log_group.create_item.arn}:*");
+    expect(lambdaLogsPolicy).toContain("${aws_cloudwatch_log_group.get_item.arn}:*");
+    expect(lambdaLogsPolicy).toContain("${aws_cloudwatch_log_group.update_item.arn}:*");
+    expect(lambdaLogsPolicy).toContain("${aws_cloudwatch_log_group.delete_item.arn}:*");
+  });
+
+  it("uses an explicit API Gateway CloudWatch Logs action allowlist", () => {
+    const apiGatewayLogsPolicy = resourceBlock(
+      main,
+      "aws_iam_role_policy",
+      "api_gateway_cloudwatch_logs"
+    );
+
+    expect(main).not.toContain("AmazonAPIGatewayPushToCloudWatchLogs");
+    expect(apiGatewayLogsPolicy).toContain('"logs:CreateLogGroup"');
+    expect(apiGatewayLogsPolicy).toContain('"logs:CreateLogStream"');
+    expect(apiGatewayLogsPolicy).toContain('"logs:PutLogEvents"');
+    expect(apiGatewayLogsPolicy).toContain('Resource = "*"');
+    expect(apiGatewayLogsPolicy).not.toContain('"logs:*"');
+    expect(apiGatewayLogsPolicy).not.toMatch(/Action\s*=\s*"\*"/);
+  });
+
+  it("keeps API Gateway Lambda invoke permissions route scoped", () => {
+    for (const permission of ["apigw_create", "apigw_get", "apigw_update", "apigw_delete"]) {
+      const block = resourceBlock(main, "aws_lambda_permission", permission);
+      expect(block).toContain('principal     = "apigateway.amazonaws.com"');
+      expect(block).toContain('action        = "lambda:InvokeFunction"');
+      expect(block).toContain("aws_api_gateway_rest_api.api.execution_arn");
+      expect(block).not.toMatch(/source_arn\s*=\s*"\*"/);
+    }
   });
 });

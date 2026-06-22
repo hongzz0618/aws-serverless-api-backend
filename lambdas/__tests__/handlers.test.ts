@@ -151,7 +151,6 @@ const expectMissingTableNameLog = ({
         operation,
         statusCode: 500,
         errorName: "Error",
-        errorMessage: "Missing required environment variable: TABLE_NAME",
       }),
     ])
   );
@@ -162,6 +161,9 @@ const expectMissingTableNameLog = ({
   if (sensitiveBodyValue) {
     expect(JSON.stringify(logs)).not.toContain(sensitiveBodyValue);
   }
+
+  expect(JSON.stringify(logs)).not.toContain("Missing required environment variable");
+  expect(JSON.stringify(logs)).not.toContain("TABLE_NAME");
 };
 
 beforeEach(() => {
@@ -825,10 +827,10 @@ describe("getItem handler", () => {
           statusCode: 500,
           itemId: TEST_ITEM_ID,
           errorName: "Error",
-          errorMessage: "Stored item has an invalid shape",
         }),
       ])
     );
+    expect(JSON.stringify(errorLoggedJson())).not.toContain("Stored item has an invalid shape");
   });
 
   it("returns a safe 500 when DynamoDB fails", async () => {

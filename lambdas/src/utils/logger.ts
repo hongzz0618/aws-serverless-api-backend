@@ -13,17 +13,15 @@ interface LoggerOptions {
   operation?: string;
 }
 
-const serializeError = (error: unknown): Pick<LogFields, "errorName" | "errorMessage"> => {
+const serializeError = (error: unknown): Pick<LogFields, "errorName"> => {
   if (error instanceof Error) {
     return {
       errorName: error.name,
-      errorMessage: error.message,
     };
   }
 
   return {
     errorName: "UnknownError",
-    errorMessage: String(error),
   };
 };
 

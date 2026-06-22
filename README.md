@@ -225,6 +225,9 @@ Current state:
 - API Gateway throttling is configured to reduce accidental abuse and cost risk, but it is not a substitute for authentication or WAF protections.
 - Lambda invoke permissions are scoped to the API Gateway routes that call each function.
 - Lambda DynamoDB permissions are scoped to the project tables and limited to the actions used by the handlers, including `TransactWriteItems` for idempotent create completion.
+- Lambda log permissions are defined inline and scoped to the Terraform-managed Lambda log groups; API Gateway logging uses an explicit CloudWatch Logs action allowlist.
+- GitHub Actions uses a read-only repository token, does not receive AWS credentials, and does not deploy infrastructure.
+- Production dependencies are checked with `npm audit --omit=dev`; dev-only audit findings should be reviewed separately before broadening use.
 - No secrets should be committed to the repository, Terraform files, Lambda source, or local configuration.
 
 CORS and OPTIONS preflight handling are not configured in this reference implementation. The current examples assume direct API usage with tools such as curl or backend clients. Browser-based clients should add explicit CORS headers and OPTIONS routes with a specific allowed origin rather than using permissive defaults. CORS is not an authentication mechanism.
@@ -248,9 +251,9 @@ Logged fields include:
 - HTTP status code for completed outcomes
 - Safe item ID values for item-level operations
 - Short idempotency key correlation hashes for create retry diagnostics
-- Error name and error message for unexpected failures
+- Error name for unexpected failures
 
-The handlers do not log full request bodies, full idempotency keys, request fingerprints, or sensitive headers. That keeps potentially sensitive user-submitted data, such as item names, out of application logs.
+The handlers do not log full request bodies, full idempotency keys, request fingerprints, arbitrary exception messages, or sensitive headers. That keeps potentially sensitive user-submitted data, such as item names, and internal resource details out of application logs.
 
 API Gateway access logs are also enabled for the `dev` stage. They include request metadata such as request ID, source IP, HTTP method, resource path, status, response length, and integration error message when API Gateway provides one. They intentionally do not include request bodies, authorization headers, sensitive headers, or environment variables.
 
@@ -376,7 +379,7 @@ Before broader use, deployment automation should add:
 
 GitHub Actions runs two jobs:
 
-- Lambda checks: `npm ci`, `npm run typecheck`, `npm test`, `npm run build`, `npm audit --omit=dev`, and Lambda packaging
+- Lambda checks: `npm ci`, `npm run typecheck`, `npm test`, OpenAPI contract checks, `npm run build`, `npm audit --omit=dev`, Lambda packaging, and artifact verification
 - Terraform checks: artifact download, `terraform fmt -check -recursive`, `terraform init -backend=false`, and `terraform validate`
 
 The CI workflow validates the application and infrastructure definitions, but it does not currently deploy to AWS.

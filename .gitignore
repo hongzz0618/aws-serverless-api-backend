@@ -13,6 +13,11 @@ override.tf.json
 .terraform/
 
 # Sensitive files
+.env
+.env.*
+!.env.example
+.aws/
+credentials
 *.pem
 *.key
 secrets/*
@@ -29,6 +34,7 @@ secrets/*
 
 # Log files
 *.log
+*.tfplan
 
 # System files
 .DS_Store

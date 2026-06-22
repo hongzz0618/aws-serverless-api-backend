@@ -224,7 +224,7 @@ Current state:
 - The deployed API is publicly reachable unless additional controls are added.
 - API Gateway throttling is configured to reduce accidental abuse and cost risk, but it is not a substitute for authentication or WAF protections.
 - Lambda invoke permissions are scoped to the API Gateway routes that call each function.
-- Lambda DynamoDB permissions are scoped to the project tables and limited to the actions used by the handlers, including `TransactWriteItems` for idempotent create completion.
+- Lambda uses a shared execution role. Its DynamoDB permissions are scoped to the two project tables and limited to the union of actions required by the four handlers, including `TransactWriteItems` for idempotent create completion.
 - Lambda log permissions are defined inline and scoped to the Terraform-managed Lambda log groups; API Gateway logging uses an explicit CloudWatch Logs action allowlist.
 - GitHub Actions uses a read-only repository token, does not receive AWS credentials, and does not deploy infrastructure.
 - Production dependencies are checked with `npm audit --omit=dev`; dev-only audit findings should be reviewed separately before broadening use.

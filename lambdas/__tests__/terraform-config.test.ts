@@ -7,21 +7,28 @@ const repoRoot = join(process.cwd(), "..");
 const readRepoFile = (path: string): string =>
   readFileSync(join(repoRoot, path), "utf8");
 
+const stripCommentOnlyLines = (source: string): string =>
+  source
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*(#|\/\/)/.test(line))
+    .join("\n");
+
 const resourceBlock = (source: string, type: string, name: string): string => {
-  const start = source.indexOf(`resource "${type}" "${name}"`);
+  const uncommentedSource = stripCommentOnlyLines(source);
+  const start = uncommentedSource.indexOf(`resource "${type}" "${name}"`);
   expect(start).toBeGreaterThanOrEqual(0);
 
-  const open = source.indexOf("{", start);
+  const open = uncommentedSource.indexOf("{", start);
   let depth = 0;
-  for (let index = open; index < source.length; index += 1) {
-    if (source[index] === "{") {
+  for (let index = open; index < uncommentedSource.length; index += 1) {
+    if (uncommentedSource[index] === "{") {
       depth += 1;
     }
-    if (source[index] === "}") {
+    if (uncommentedSource[index] === "}") {
       depth -= 1;
     }
     if (depth === 0) {
-      return source.slice(start, index + 1);
+      return uncommentedSource.slice(start, index + 1);
     }
   }
 
@@ -89,6 +96,24 @@ describe("terraform pre-deployment security boundaries", () => {
     expect(lambdaLogsPolicy).toContain("${aws_cloudwatch_log_group.delete_item.arn}:*");
   });
 
+  it("matches Lambda log group names to Lambda function names", () => {
+    const expectedPairs = [
+      ["create_item", "create"],
+      ["get_item", "get"],
+      ["update_item", "update"],
+      ["delete_item", "delete"],
+    ];
+
+    for (const [resourceName, suffix] of expectedPairs) {
+      const logGroup = resourceBlock(main, "aws_cloudwatch_log_group", resourceName);
+      const lambda = resourceBlock(main, "aws_lambda_function", resourceName);
+
+      expect(logGroup).toContain(`name              = "/aws/lambda/\${var.project_name}-${suffix}"`);
+      expect(lambda).toContain(`function_name = "\${var.project_name}-${suffix}"`);
+      expect(lambda).toContain(`depends_on = [aws_cloudwatch_log_group.${resourceName}]`);
+    }
+  });
+
   it("uses an explicit API Gateway CloudWatch Logs action allowlist", () => {
     const apiGatewayLogsPolicy = resourceBlock(
       main,
@@ -106,12 +131,32 @@ describe("terraform pre-deployment security boundaries", () => {
   });
 
   it("keeps API Gateway Lambda invoke permissions route scoped", () => {
-    for (const permission of ["apigw_create", "apigw_get", "apigw_update", "apigw_delete"]) {
+    const expectedPermissions = [
+      [
+        "apigw_create",
+        "${aws_api_gateway_rest_api.api.execution_arn}/*/${aws_api_gateway_method.post_items.http_method}/${aws_api_gateway_resource.items.path_part}",
+      ],
+      [
+        "apigw_get",
+        "${aws_api_gateway_rest_api.api.execution_arn}/*/${aws_api_gateway_method.get_item.http_method}/${aws_api_gateway_resource.items.path_part}/*",
+      ],
+      [
+        "apigw_update",
+        "${aws_api_gateway_rest_api.api.execution_arn}/*/${aws_api_gateway_method.put_item.http_method}/${aws_api_gateway_resource.items.path_part}/*",
+      ],
+      [
+        "apigw_delete",
+        "${aws_api_gateway_rest_api.api.execution_arn}/*/${aws_api_gateway_method.delete_item.http_method}/${aws_api_gateway_resource.items.path_part}/*",
+      ],
+    ];
+
+    for (const [permission, sourceArn] of expectedPermissions) {
       const block = resourceBlock(main, "aws_lambda_permission", permission);
       expect(block).toContain('principal     = "apigateway.amazonaws.com"');
       expect(block).toContain('action        = "lambda:InvokeFunction"');
-      expect(block).toContain("aws_api_gateway_rest_api.api.execution_arn");
+      expect(block).toContain(`source_arn    = "${sourceArn}"`);
       expect(block).not.toMatch(/source_arn\s*=\s*"\*"/);
+      expect(block).not.toContain("/*/*/*");
     }
   });
 });

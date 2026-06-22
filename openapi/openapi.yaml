@@ -1,28 +1,30 @@
 openapi: 3.0.3
+
 info:
   title: AWS Serverless Items API
   version: 1.0.0
   description: >
-    Contract for the currently implemented item API. This document describes the
-    Lambda/API Gateway behavior in this repository and is not the API Gateway
-    deployment source.
+    API contract for the item-management backend implemented in this
+    repository. API Gateway deployment is defined by Terraform; this OpenAPI
+    document is used for documentation and automated contract validation.
+
 servers:
   - url: https://example.execute-api.region.amazonaws.com/dev
-    description: Example deployment endpoint placeholder
+    description: Neutral example endpoint for the Terraform-managed dev stage
+
+security: []
+
 paths:
   /items:
     post:
       operationId: createItem
       summary: Create an item
       description: >
-        Creates an item with a generated UUID and version 1. The request requires
-        a client supplied Idempotency-Key header. Replaying the same key with the
-        same normalized payload returns the original 201 response and
-        Idempotency-Replayed: true. Reusing the key with a different payload, or
-        while the original request is still in progress, returns 409. Expired
-        in-progress reservations may be recovered by the same key and payload
-        without exposing reservation, fingerprint, table, transaction, or lease
-        internals to clients.
+        Creates an item with a generated UUID and version 1. The caller must
+        provide an Idempotency-Key header. Replaying the same key with the same
+        normalized payload returns the original 201 response. Reusing the key
+        with another payload, or while the original request is still in
+        progress, returns 409 Conflict.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -31,60 +33,51 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/CreateItemRequest"
-            examples:
-              create:
-                value:
-                  name: Laptop charger
+            example:
+              name: Laptop charger
       responses:
         "201":
-          description: Item created, or original create response replayed for the same key and payload.
+          description: >
+            Item created, or the original create response replayed for the same
+            idempotency key and payload.
           headers:
             Idempotency-Replayed:
-              description: Present with value true only when this response is an idempotent replay.
+              description: >
+                Present with value true only when the stored response is
+                returned as an idempotent replay.
               schema:
                 type: string
-                enum: ["true"]
+                enum:
+                  - "true"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/CreateItemResponse"
-              examples:
-                created:
-                  value:
-                    message: Item created
-                    id: 00000000-0000-4000-8000-000000000001
-                    version: 1
+              example:
+                message: Item created
+                id: 00000000-0000-4000-8000-000000000001
+                version: 1
+
         "400":
-          $ref: "#/components/responses/ValidationError"
+          $ref: "#/components/responses/CreateValidationError"
+
         "409":
-          description: Idempotency conflict, in-progress request conflict, or generated item ID collision.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                differentPayload:
-                  value:
-                    error: Idempotency key was already used with a different request
-                inProgress:
-                  value:
-                    error: Request with this idempotency key is already in progress
-                existingItem:
-                  value:
-                    error: Item already exists
+          $ref: "#/components/responses/CreateConflictError"
+
         "500":
-          description: Safe create failure response.
+          description: Safe response for an internal create failure.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
                 error: Failed to create item
+
   /items/{id}:
     get:
       operationId: getItem
       summary: Get an item
-      description: Fetches one item by UUID path parameter.
+      description: Retrieves an item by UUID.
       parameters:
         - $ref: "#/components/parameters/ItemId"
       responses:
@@ -99,27 +92,31 @@ paths:
                 name: Laptop charger
                 createdAt: "2026-05-14T10:00:00.000Z"
                 version: 1
+
         "400":
-          $ref: "#/components/responses/ValidationError"
+          $ref: "#/components/responses/ItemIdValidationError"
+
         "404":
           $ref: "#/components/responses/NotFoundError"
+
         "500":
-          description: Safe fetch failure response.
+          description: Safe response for an internal read failure.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
                 error: Failed to fetch item
+
     put:
       operationId: updateItem
       summary: Update an item
       description: >
-        Updates an item by UUID using optimistic locking. The client supplies the
-        expected positive integer version in the JSON request body, not in an
-        If-Match or ETag header. A successful update increments version by 1.
-        Stale versions return 409 when the item still exists; if the item is
-        missing before or after the conditional update, the response is 404.
+        Updates an item using version-based optimistic locking. The request
+        body contains the version that the caller expects to be current. A
+        successful update increments the version by 1. A stale version returns
+        409 Conflict when the item still exists. If the item is missing before
+        or after the conditional update, the response is 404 Not Found.
       parameters:
         - $ref: "#/components/parameters/ItemId"
       requestBody:
@@ -128,14 +125,12 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/UpdateItemRequest"
-            examples:
-              update:
-                value:
-                  name: Laptop charger - spare
-                  version: 1
+            example:
+              name: Laptop charger - spare
+              version: 1
       responses:
         "200":
-          description: Item updated with an incremented version.
+          description: Item updated and version incremented.
           content:
             application/json:
               schema:
@@ -145,24 +140,31 @@ paths:
                 name: Laptop charger - spare
                 createdAt: "2026-05-14T10:00:00.000Z"
                 version: 2
+
         "400":
-          $ref: "#/components/responses/ValidationError"
+          $ref: "#/components/responses/UpdateValidationError"
+
         "404":
           $ref: "#/components/responses/NotFoundError"
+
         "409":
           $ref: "#/components/responses/VersionConflictError"
+
         "500":
-          description: Safe update failure response.
+          description: Safe response for an internal update failure.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
                 error: Failed to update item
+
     delete:
       operationId: deleteItem
       summary: Delete an item
-      description: Deletes an item by UUID. The current implementation does not require or accept a version body.
+      description: >
+        Deletes an item by UUID. The current implementation does not require or
+        accept a request body or item version.
       parameters:
         - $ref: "#/components/parameters/ItemId"
       responses:
@@ -175,18 +177,22 @@ paths:
               example:
                 message: Item deleted
                 id: 00000000-0000-4000-8000-000000000001
+
         "400":
-          $ref: "#/components/responses/ValidationError"
+          $ref: "#/components/responses/ItemIdValidationError"
+
         "404":
           $ref: "#/components/responses/NotFoundError"
+
         "500":
-          description: Safe delete failure response.
+          description: Safe response for an internal delete failure.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
                 error: Failed to delete item
+
 components:
   parameters:
     IdempotencyKey:
@@ -194,15 +200,16 @@ components:
       in: header
       required: true
       description: >
-        Client-generated idempotency key. Header lookup is case-insensitive.
-        Valid keys are 8 to 128 characters using letters, digits, hyphen,
-        underscore, period, or colon.
+        Client-generated key used to make item creation safe to retry. Valid
+        keys contain 8 to 128 letters, digits, hyphens, underscores, periods,
+        or colons. Header lookup is case-insensitive.
       schema:
         type: string
         minLength: 8
         maxLength: 128
         pattern: ^[A-Za-z0-9._:-]{8,128}$
       example: item-create:00000001
+
     ItemId:
       name: id
       in: path
@@ -212,20 +219,86 @@ components:
         type: string
         format: uuid
       example: 00000000-0000-4000-8000-000000000001
+
   responses:
-    ValidationError:
-      description: Request validation failed.
+    CreateValidationError:
+      description: Create request validation failed.
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
           examples:
+            missingIdempotencyKey:
+              summary: Missing idempotency key
+              value:
+                error: Idempotency-Key header is required
+
+            invalidIdempotencyKey:
+              summary: Invalid idempotency key
+              value:
+                error: Idempotency-Key header is invalid
+
+            missingBody:
+              summary: Missing request body
+              value:
+                error: Request body is required
+
             invalidJson:
+              summary: Invalid JSON body
               value:
                 error: Request body must be valid JSON
+
+            invalidName:
+              summary: Invalid item name
+              value:
+                error: Name cannot be empty
+
+    ItemIdValidationError:
+      description: Item ID validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: Item id must be a valid UUID
+
+    UpdateValidationError:
+      description: Update request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
             invalidId:
+              summary: Invalid item ID
               value:
                 error: Item id must be a valid UUID
+
+            missingBody:
+              summary: Missing request body
+              value:
+                error: Request body is required
+
+            invalidJson:
+              summary: Invalid JSON body
+              value:
+                error: Request body must be valid JSON
+
+            missingName:
+              summary: Missing item name
+              value:
+                error: Name is required
+
+            missingVersion:
+              summary: Missing item version
+              value:
+                error: Version is required
+
+            invalidVersion:
+              summary: Invalid item version
+              value:
+                error: Version must be a positive integer
+
     NotFoundError:
       description: Item was not found.
       content:
@@ -234,6 +307,31 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
           example:
             error: Item not found
+
+    CreateConflictError:
+      description: >
+        The idempotency key conflicts with another request, the original
+        request is still in progress, or the generated item ID already exists.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            differentPayload:
+              summary: Key reused with another payload
+              value:
+                error: Idempotency key was already used with a different request
+
+            inProgress:
+              summary: Original request still in progress
+              value:
+                error: Request with this idempotency key is already in progress
+
+            existingItem:
+              summary: Generated item ID already exists
+              value:
+                error: Item already exists
+
     VersionConflictError:
       description: Submitted version does not match the current item version.
       content:
@@ -242,6 +340,7 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
           example:
             error: Item version conflict
+
   schemas:
     CreateItemRequest:
       type: object
@@ -253,9 +352,13 @@ components:
           type: string
           minLength: 1
           maxLength: 100
-          description: Item name. Runtime validation trims surrounding whitespace before storage.
+          description: >
+            Item name. Surrounding whitespace is trimmed before validation and
+            storage. Whitespace-only names are rejected. Additional request
+            properties are ignored by runtime validation.
       example:
         name: Laptop charger
+
     UpdateItemRequest:
       type: object
       additionalProperties: true
@@ -267,14 +370,19 @@ components:
           type: string
           minLength: 1
           maxLength: 100
-          description: Item name. Runtime validation trims surrounding whitespace before storage.
+          description: >
+            Updated item name. Surrounding whitespace is trimmed before
+            validation and storage. Whitespace-only names are rejected.
+            Additional request properties are ignored by runtime validation.
+
         version:
           type: integer
           minimum: 1
-          description: Expected current item version supplied by the client.
+          description: Current item version expected by the caller.
       example:
         name: Laptop charger - spare
         version: 1
+
     CreateItemResponse:
       type: object
       additionalProperties: false
@@ -285,10 +393,13 @@ components:
       properties:
         message:
           type: string
-          enum: [Item created]
+          enum:
+            - Item created
+
         id:
           type: string
           format: uuid
+
         version:
           type: integer
           minimum: 1
@@ -296,6 +407,7 @@ components:
         message: Item created
         id: 00000000-0000-4000-8000-000000000001
         version: 1
+
     DeleteItemResponse:
       type: object
       additionalProperties: false
@@ -305,13 +417,16 @@ components:
       properties:
         message:
           type: string
-          enum: [Item deleted]
+          enum:
+            - Item deleted
+
         id:
           type: string
           format: uuid
       example:
         message: Item deleted
         id: 00000000-0000-4000-8000-000000000001
+
     Item:
       type: object
       additionalProperties: false
@@ -324,13 +439,16 @@ components:
         id:
           type: string
           format: uuid
+
         name:
           type: string
           minLength: 1
           maxLength: 100
+
         createdAt:
           type: string
           format: date-time
+
         version:
           type: integer
           minimum: 1
@@ -339,6 +457,7 @@ components:
         name: Laptop charger
         createdAt: "2026-05-14T10:00:00.000Z"
         version: 1
+
     ErrorResponse:
       type: object
       additionalProperties: false

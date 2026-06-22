@@ -191,7 +191,9 @@ GitHub Actions uses a read-only repository token and does not receive AWS creden
 
 The API does not implement authentication, authorization, CORS, WAF protection, or per-client quotas. It should not be exposed for broader use without an identity and abuse-protection strategy.
 
-## Deployment Evidence
+## Earlier Deployment Evidence
+
+These screenshots document an earlier deployment baseline. The current idempotency, contract-validation, artifact-verification, and observability changes have not yet been validated together in a new AWS deployment.
 
 <details>
 <summary>View deployment screenshots</summary>

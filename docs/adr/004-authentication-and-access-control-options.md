@@ -14,7 +14,7 @@ That choice also means a deployed API URL is publicly reachable. API Gateway thr
 
 An unauthenticated public API can create several risks if it is left deployed or used outside a controlled demo account:
 
-- Anyone with the URL can create, read, or delete item records.
+- Anyone with the URL can create, read, update, or delete item records.
 - Automated clients can create unnecessary API Gateway, Lambda, DynamoDB, and CloudWatch cost.
 - There is no caller identity for auditing or per-user access decisions.
 - Stage-level throttling is shared across all callers and does not distinguish trusted from untrusted traffic.

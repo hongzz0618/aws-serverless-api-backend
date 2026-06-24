@@ -141,7 +141,7 @@ GitHub Actions runs the same application, artifact, and Terraform checks with re
 ### Prerequisites
 
 - AWS credentials
-- Terraform `>= 1.7.0`
+- Terraform `>= 1.11.0`
 - Node.js 22 and npm
 - Bash-compatible shell
 - `zip` available on `PATH`
@@ -207,7 +207,7 @@ The API does not implement authentication, authorization, CORS, WAF protection, 
 
 ## AWS Deployment Validation
 
-A complete deployment-validation-destroy cycle was executed in `eu-west-1` against real AWS resources. The cycle covered deployment of 58 Terraform-managed resources, runtime smoke testing, API Gateway access-log review, Lambda structured-log review, CloudWatch alarm verification, cleanup, and post-destroy reproducibility checks.
+A complete deployment, runtime-validation, and teardown cycle was executed in `eu-west-1` using real AWS resources. The cycle covered deployment of 58 Terraform-managed resources, runtime smoke testing, API Gateway access-log review, Lambda structured-log review, CloudWatch alarm verification, cleanup, and post-destroy reproducibility checks.
 
 The runtime checks covered item creation, idempotent replay, idempotency-key conflict handling, item retrieval, optimistic-locking update, stale-version conflict handling, deletion, and post-deletion `404` behavior. During validation, an IAM defect in the Lambda DynamoDB policy was found, corrected, covered by regression tests, redeployed, and revalidated.
 
@@ -216,8 +216,6 @@ The environment was destroyed after validation. The API is no longer deployed or
 Full evidence and validation notes are in [`docs/deployment-validation.md`](docs/deployment-validation.md).
 
 ![Smoke test pass](docs/evidence/02-smoke-test-pass.png)
-
-![Destroy complete](docs/evidence/05-destroy-complete.png)
 
 ## Limitations and Trade-offs
 

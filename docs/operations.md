@@ -328,11 +328,12 @@ After teardown:
 * GitHub Actions validates and packages the project but does not deploy it.
 * The post-deployment smoke test is not run automatically in CI.
 * DynamoDB monitoring does not provide dedicated system-error alarms for every idempotency-table and transaction-specific operation.
-* The current idempotency implementation and related CloudWatch metrics still require end-to-end validation against a deployment of the current commit.
+* Significant changes to the idempotency implementation or related CloudWatch metrics should be revalidated against a deployed environment.
 
 ## Related Documentation
 
 * [OpenAPI contract](../openapi/openapi.yaml)
+* [AWS deployment validation](deployment-validation.md)
 * [ADR 005: Conditional item creation](adr/005-use-conditional-writes-for-item-creation.md)
 * [ADR 006: Optimistic locking](adr/006-use-optimistic-locking-for-item-updates.md)
 * [ADR 007: Idempotency keys](adr/007-use-idempotency-keys-for-item-creation.md)

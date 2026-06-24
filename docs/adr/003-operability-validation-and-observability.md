@@ -34,4 +34,4 @@ Benefits:
 
 ## Consequences
 
-The project now demonstrates additional operational controls while staying small. Important gaps remain: authentication and authorization, WAF or stronger public abuse controls, multi-environment strategy, deployment smoke tests, dashboards, and deeper operational readiness work.
+The project now demonstrates additional operational controls while staying small. Important gaps remain: authentication and authorization, WAF or stronger public abuse controls, multi-environment strategy, automated post-deployment smoke testing in a deployment pipeline, dashboards, and deeper operational readiness work.

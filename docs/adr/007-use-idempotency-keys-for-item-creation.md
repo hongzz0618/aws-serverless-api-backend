@@ -116,4 +116,4 @@ The record TTL is not immediate deletion. Operators should treat stuck records c
 
 This design provides retry-safe item creation within the documented idempotency retention window. It does not claim exactly-once delivery across all network, client, and service failure modes.
 
-This decision has not been validated against a deployed AWS API in this batch. Deployment validation should verify first create, exact replay, same-key conflict, normal item lifecycle, and CloudWatch metric behavior.
+This decision was validated against a deployed AWS API in `eu-west-1`. The validation covered first creation, exact replay, same-key conflict, the normal item lifecycle, structured log events, and CloudWatch monitoring. See [AWS Deployment Validation](../deployment-validation.md).

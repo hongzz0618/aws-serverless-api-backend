@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-The API stores simple item records and retrieves or deletes them by a generated UUID. The current access pattern is direct lookup by item ID, not reporting, relational joins, or broad ad-hoc querying.
+The API stores simple item records and accesses them by generated UUID. The current access pattern is create by UUID, direct read by UUID, conditional update by UUID, and delete by UUID, not reporting, relational joins, or broad ad-hoc querying.
 
 ## Decision
 
@@ -14,7 +14,7 @@ Use a DynamoDB table with `id` as the partition key and on-demand billing.
 
 ## Rationale
 
-DynamoDB matches the current access pattern well: write an item by UUID, fetch that exact item by UUID, and delete that exact item by UUID. For this scope, a single-table key-value design is simpler than operating a relational database or designing a more complex data model.
+DynamoDB matches the current access pattern well: create an item by UUID, fetch that exact item by UUID, conditionally update that item by UUID, and delete that exact item by UUID. For this scope, a single-table key-value design is simpler than operating a relational database or designing a more complex data model.
 
 Benefits:
 

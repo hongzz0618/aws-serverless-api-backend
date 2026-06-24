@@ -256,6 +256,7 @@ resource "aws_iam_role_policy" "api_gateway_cloudwatch_logs" {
 
 resource "aws_api_gateway_account" "account" {
   cloudwatch_role_arn = aws_iam_role.api_gateway_cloudwatch.arn
+  reset_on_delete     = true
 
   depends_on = [aws_iam_role_policy.api_gateway_cloudwatch_logs]
 }

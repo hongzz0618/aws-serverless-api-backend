@@ -230,6 +230,11 @@ run "api_gateway_contract" {
     condition     = aws_api_gateway_method_settings.dev_all.settings[0].throttling_rate_limit == var.api_throttle_rate_limit && aws_api_gateway_method_settings.dev_all.settings[0].throttling_burst_limit == var.api_throttle_burst_limit
     error_message = "API Gateway throttling settings must be wired from variables."
   }
+
+  assert {
+    condition     = aws_api_gateway_account.account.reset_on_delete == true
+    error_message = "API Gateway account settings must be reset during Terraform destroy."
+  }
 }
 
 run "iam_contract" {

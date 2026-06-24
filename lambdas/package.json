@@ -1,8 +1,8 @@
 {
-  "name": "lambdas",
+  "name": "aws-serverless-api-backend-lambdas",
   "version": "1.0.0",
-  "description": "",
-  "main": "createItem.js",
+  "private": true,
+  "description": "TypeScript Lambda handlers for the AWS serverless items API.",
   "type": "module",
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.896.0",
@@ -34,7 +34,5 @@
   "overrides": {
     "fast-xml-parser": "5.8.0"
   },
-  "keywords": [],
-  "author": "",
   "license": "ISC"
 }

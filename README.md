@@ -1,5 +1,7 @@
 # AWS Serverless API Backend
 
+[![CI](https://github.com/hongzz0618/aws-serverless-api-backend/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hongzz0618/aws-serverless-api-backend/actions/workflows/ci.yml)
+
 A TypeScript REST API on AWS using API Gateway, four Lambda functions, DynamoDB, Terraform, and GitHub Actions.
 
 The project focuses on retry-safe writes, optimistic concurrency control, API contract validation, observability, scoped permissions, reproducible Lambda deployment artifacts, and plan-level infrastructure checks.

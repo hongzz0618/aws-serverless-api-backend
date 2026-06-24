@@ -14,7 +14,7 @@ The validation covered the Terraform-managed API Gateway, Lambda, DynamoDB, IAM,
 
 The cycle validated both infrastructure behavior and runtime API behavior. Automated tests and Terraform plan-contract tests remained part of the project quality checks, while this document records the separate real AWS runtime validation.
 
-Runtime behavior was validated at commit `c904ea2`. Subsequent commits were limited to destroy cleanup, regression-test alignment, Terraform and CI version alignment, and documentation; the validated Lambda runtime behavior did not change.
+Runtime behavior was validated at commit `c904ea2`. Subsequent commits were limited to destroy cleanup, regression-test alignment, Terraform and CI version alignment, package metadata, and documentation; the validated Lambda runtime behavior did not change.
 
 ## Runtime scenarios verified
 

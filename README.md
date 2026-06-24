@@ -232,7 +232,7 @@ Full evidence and validation notes are in [`docs/deployment-validation.md`](docs
 
 The serverless design reduces infrastructure management and fits small or irregular workloads. The trade-off is greater dependence on managed-service behavior, Lambda limits, API Gateway configuration, and access-pattern-driven DynamoDB modeling.
 
-DynamoDB uses on-demand billing and CloudWatch logs default to seven-day retention, but requests, logs, metrics, and alarms can still generate cost.
+DynamoDB uses on-demand billing, and the Terraform-managed Lambda and API access log groups default to seven-day retention. API Gateway execution-log retention and lifecycle are managed separately. Requests, logs, metrics, and alarms can still generate cost.
 
 ## Architecture Decisions
 

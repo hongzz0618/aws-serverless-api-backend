@@ -62,7 +62,9 @@ describe("terraform idempotency configuration", () => {
     const dynamodbPolicy = resourceBlock(main, "aws_iam_role_policy", "lambda_dynamodb_items");
     expect(main).toContain("aws_dynamodb_table.items.arn");
     expect(main).toContain("aws_dynamodb_table.idempotency.arn");
-    expect(dynamodbPolicy).toContain('"dynamodb:TransactWriteItems"');
+    expect(dynamodbPolicy).toContain('"dynamodb:PutItem"');
+    expect(dynamodbPolicy).toContain('"dynamodb:UpdateItem"');
+    expect(dynamodbPolicy).not.toContain('"dynamodb:TransactWriteItems"');
     expect(dynamodbPolicy).not.toContain('"dynamodb:*"');
     expect(dynamodbPolicy).not.toMatch(/Action\s*=\s*"\*"/);
     expect(dynamodbPolicy).not.toMatch(/Resource\s*=\s*"\*"/);

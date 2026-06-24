@@ -60,9 +60,9 @@ resource "aws_iam_role_policy" "lambda_dynamodb_items" {
         Effect = "Allow"
         Action = [
           "dynamodb:GetItem",
+          "dynamodb:PutItem",
           "dynamodb:UpdateItem",
-          "dynamodb:DeleteItem",
-          "dynamodb:TransactWriteItems"
+          "dynamodb:DeleteItem"
         ]
         Resource = aws_dynamodb_table.items.arn
       },
@@ -72,8 +72,7 @@ resource "aws_iam_role_policy" "lambda_dynamodb_items" {
           "dynamodb:PutItem",
           "dynamodb:GetItem",
           "dynamodb:UpdateItem",
-          "dynamodb:DeleteItem",
-          "dynamodb:TransactWriteItems"
+          "dynamodb:DeleteItem"
         ]
         Resource = aws_dynamodb_table.idempotency.arn
       }

@@ -17,7 +17,8 @@ override_resource {
 }
 
 override_resource {
-  target = aws_dynamodb_table.items
+  target          = aws_dynamodb_table.items
+  override_during = plan
 
 
   values = {
@@ -26,7 +27,8 @@ override_resource {
 }
 
 override_resource {
-  target = aws_dynamodb_table.idempotency
+  target          = aws_dynamodb_table.idempotency
+  override_during = plan
 
 
   values = {
@@ -241,6 +243,26 @@ run "iam_contract" {
   assert {
     condition     = aws_iam_role_policy.lambda_dynamodb_items.name == "${var.project_name}-lambda-dynamodb-items"
     error_message = "The Lambda DynamoDB permissions must remain in the dedicated inline policy."
+  }
+
+  assert {
+    condition     = contains(one([for statement in jsondecode(aws_iam_role_policy.lambda_dynamodb_items.policy).Statement : statement if statement.Resource == aws_dynamodb_table.items.arn]).Action, "dynamodb:PutItem")
+    error_message = "The Lambda DynamoDB permissions must allow PutItem on the items table."
+  }
+
+  assert {
+    condition     = contains(one([for statement in jsondecode(aws_iam_role_policy.lambda_dynamodb_items.policy).Statement : statement if statement.Resource == aws_dynamodb_table.idempotency.arn]).Action, "dynamodb:UpdateItem")
+    error_message = "The Lambda DynamoDB permissions must allow UpdateItem on the idempotency table."
+  }
+
+  assert {
+    condition     = alltrue([for statement in jsondecode(aws_iam_role_policy.lambda_dynamodb_items.policy).Statement : !contains(statement.Action, "dynamodb:TransactWriteItems")])
+    error_message = "The Lambda DynamoDB permissions must not use TransactWriteItems as the transaction permission."
+  }
+
+  assert {
+    condition     = length([for statement in jsondecode(aws_iam_role_policy.lambda_dynamodb_items.policy).Statement : statement if statement.Resource == aws_dynamodb_table.items.arn]) == 1 && length([for statement in jsondecode(aws_iam_role_policy.lambda_dynamodb_items.policy).Statement : statement if statement.Resource == aws_dynamodb_table.idempotency.arn]) == 1
+    error_message = "The Lambda DynamoDB permissions must remain scoped to the items and idempotency table ARNs."
   }
 
   assert {

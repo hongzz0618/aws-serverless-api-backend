@@ -205,20 +205,19 @@ GitHub Actions uses a read-only repository token and does not receive AWS creden
 
 The API does not implement authentication, authorization, CORS, WAF protection, or per-client quotas. It should not be exposed for broader use without an identity and abuse-protection strategy.
 
-## Earlier Deployment Evidence
+## AWS Deployment Validation
 
-These screenshots document an earlier deployment baseline. The current idempotency, contract-validation, artifact-verification, observability, and Terraform plan-test changes have not yet been validated together in a new AWS deployment.
+A complete deployment-validation-destroy cycle was executed in `eu-west-1` against real AWS resources. The cycle covered deployment of 58 Terraform-managed resources, runtime smoke testing, API Gateway access-log review, Lambda structured-log review, CloudWatch alarm verification, cleanup, and post-destroy reproducibility checks.
 
-<details>
-<summary>View deployment screenshots</summary>
+The runtime checks covered item creation, idempotent replay, idempotency-key conflict handling, item retrieval, optimistic-locking update, stale-version conflict handling, deletion, and post-deletion `404` behavior. During validation, an IAM defect in the Lambda DynamoDB policy was found, corrected, covered by regression tests, redeployed, and revalidated.
 
-![Deployment validation 1](images/demo1.png)
+The environment was destroyed after validation. The API is no longer deployed or publicly available.
 
-![Deployment validation 2](images/demo2.png)
+Full evidence and validation notes are in [`docs/deployment-validation.md`](docs/deployment-validation.md).
 
-![Deployment validation 3](images/demo3.png)
+![Smoke test pass](docs/evidence/02-smoke-test-pass.png)
 
-</details>
+![Destroy complete](docs/evidence/05-destroy-complete.png)
 
 ## Limitations and Trade-offs
 

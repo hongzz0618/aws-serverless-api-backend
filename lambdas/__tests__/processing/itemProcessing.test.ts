@@ -140,13 +140,18 @@ describe("processItemCreatedEvent", () => {
     });
   });
 
-  it("classifies a missing item as permanent failure", async () => {
+  it("treats an item deleted before processing as a successful terminal state", async () => {
     const { client, send } = createClient();
     send.mockRejectedValueOnce(conditionalError()).mockResolvedValueOnce({});
 
-    await expect(processEvent(client)).resolves.toEqual({
-      status: "permanent_failure",
-      reason: "item_not_found",
+    const result = await processEvent(client);
+
+    expect(result).toEqual({ status: "item_no_longer_exists" });
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls[1]?.[0]).toBeInstanceOf(GetItemCommand);
+    expect(send.mock.calls[1]?.[0].input).toMatchObject({
+      ConsistentRead: true,
+      Key: { id: { S: itemId } },
     });
   });
 

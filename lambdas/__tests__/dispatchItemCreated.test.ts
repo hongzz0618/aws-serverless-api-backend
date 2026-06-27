@@ -1,5 +1,6 @@
 import type {
   AttributeValue,
+  Context,
   DynamoDBRecord,
   DynamoDBStreamEvent,
 } from "aws-lambda";
@@ -78,6 +79,11 @@ const createHandler = (sender: ItemCreatedEventSender) =>
   createDispatchItemCreatedHandler({
     senderFactory: () => sender,
   });
+
+const lambdaContext = (awsRequestId: string): Context =>
+  ({
+    awsRequestId,
+  }) as Context;
 
 const parsedConsoleOutput = (): Array<Record<string, unknown>> => [
   ...vi.mocked(console.log).mock.calls,
@@ -194,6 +200,15 @@ describe("dispatchItemCreated batch behavior", () => {
     });
     expect(sentEvents).toHaveLength(1);
     expect(sentEvents[0]).toMatchObject({ data: { itemId } });
+    expect(parsedConsoleOutput()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "item_created_dispatch_failed",
+          streamSequenceNumber: "100000000000000000002",
+          failureCategory: "sqs_send_failed",
+        }),
+      ])
+    );
   });
 });
 
@@ -364,6 +379,14 @@ describe("dispatchItemCreated environment", () => {
       ],
     });
     expect(sender.send).not.toHaveBeenCalled();
+    expect(parsedConsoleOutput()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "item_created_dispatch_failed",
+          failureCategory: "configuration_error",
+        }),
+      ])
+    );
   });
 });
 
@@ -372,6 +395,7 @@ describe("dispatchItemCreated logging safety", () => {
     const sensitiveValue = "secret-value-must-not-appear";
     const { sender } = createCapturingSender();
     const handler = createHandler(sender);
+    const context = lambdaContext("dispatcher-request-1");
 
     await handler(
       streamEvent([
@@ -381,7 +405,8 @@ describe("dispatchItemCreated logging safety", () => {
             name: { S: sensitiveValue },
           }),
         }),
-      ])
+      ]),
+      context
     );
 
     const logs = parsedConsoleOutput();
@@ -396,6 +421,7 @@ describe("dispatchItemCreated logging safety", () => {
           eventType: "item.created",
           eventVersion: 1,
           streamSequenceNumber: "100000000000000000001",
+          requestId: "dispatcher-request-1",
         }),
       ])
     );

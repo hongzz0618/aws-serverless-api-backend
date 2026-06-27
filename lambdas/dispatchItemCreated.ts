@@ -1,4 +1,8 @@
-import type { DynamoDBBatchResponse, DynamoDBStreamEvent } from "aws-lambda";
+import type {
+  Context,
+  DynamoDBBatchResponse,
+  DynamoDBStreamEvent,
+} from "aws-lambda";
 import { SendMessageCommand, SQSClient } from "@aws-sdk/client-sqs";
 import {
   dispatchItemCreatedRecords,
@@ -30,9 +34,13 @@ export const createDispatchItemCreatedHandler =
   }: {
     senderFactory?: (queueUrl: string) => ItemCreatedEventSender;
   } = {}) =>
-  async (event: DynamoDBStreamEvent): Promise<DynamoDBBatchResponse> => {
+  async (
+    event: DynamoDBStreamEvent,
+    context?: Context
+  ): Promise<DynamoDBBatchResponse> => {
     const logger = createLogger({
       service: "items-api",
+      context,
       operation: "dispatchItemCreated",
     });
 
@@ -53,7 +61,7 @@ export const createDispatchItemCreatedHandler =
     } catch (err) {
       logger.error("Item-created dispatcher configuration failed", err, {
         event: "item_created_dispatch_failed",
-        failureCategory: "sqs_send_failed",
+        failureCategory: "configuration_error",
       });
 
       return {

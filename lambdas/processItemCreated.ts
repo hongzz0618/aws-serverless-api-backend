@@ -141,6 +141,18 @@ export const createProcessItemCreatedHandler =
           continue;
         }
 
+        if (result.status === "item_no_longer_exists") {
+          logger.info("Item processing skipped", {
+            event: "item_processing_skipped",
+            reason: "item_deleted_before_processing",
+            eventId: itemCreatedEvent.eventId,
+            itemId: itemCreatedEvent.data.itemId,
+            messageId,
+            attempt,
+          });
+          continue;
+        }
+
         logger.warn("Item processing failed", {
           event: "item_processing_failed",
           eventId: itemCreatedEvent.eventId,

@@ -431,7 +431,7 @@ run "async_lambda_contract" {
       dispatcher = "dispatchItemCreated.handler"
       worker     = "processItemCreated.handler"
     }
-    error_message = "Async Lambda handlers must point to the expected placeholder files."
+    error_message = "Async Lambda handlers must point to the expected handler files."
   }
 
   assert {
@@ -487,20 +487,34 @@ run "async_iam_contract" {
   }
 
   assert {
-    condition = alltrue([
-      for action in [
-        "dynamodb:DescribeStream",
-        "dynamodb:GetRecords",
-        "dynamodb:GetShardIterator",
-        "dynamodb:ListStreams"
-      ] : contains(one([for statement in jsondecode(aws_iam_role_policy.item_created_dispatcher.policy).Statement : statement if statement.Resource == aws_dynamodb_table.items.stream_arn]).Action, action)
-    ])
-    error_message = "The dispatcher must have the required DynamoDB stream polling permissions."
+    condition = one([
+      for statement in jsondecode(aws_iam_role_policy.item_created_dispatcher.policy).Statement : statement
+      if statement.Resource == aws_dynamodb_table.items.stream_arn
+      ]).Action == [
+      "dynamodb:DescribeStream",
+      "dynamodb:GetRecords",
+      "dynamodb:GetShardIterator"
+    ]
+    error_message = "The dispatcher stream polling permissions must be scoped to the DynamoDB stream ARN."
   }
 
   assert {
-    condition     = !contains(flatten([for statement in jsondecode(aws_iam_role_policy.item_created_dispatcher.policy).Statement : statement.Action]), "dynamodb:UpdateItem")
-    error_message = "The dispatcher must not update the items table."
+    condition = one([
+      for statement in jsondecode(aws_iam_role_policy.item_created_dispatcher.policy).Statement : statement
+      if statement.Resource == "*"
+    ]).Action == ["dynamodb:ListStreams"]
+    error_message = "The dispatcher ListStreams permission must use wildcard resource scope."
+  }
+
+  assert {
+    condition = alltrue([
+      for action in [
+        "dynamodb:UpdateItem",
+        "dynamodb:PutItem",
+        "dynamodb:DeleteItem"
+      ] : !contains(flatten([for statement in jsondecode(aws_iam_role_policy.item_created_dispatcher.policy).Statement : statement.Action]), action)
+    ])
+    error_message = "The dispatcher must not mutate items table records."
   }
 
   assert {

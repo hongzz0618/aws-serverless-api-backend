@@ -8,6 +8,7 @@ import {
 import type { LogFields } from "../utils/logger.js";
 
 export type ItemCreatedDispatchFailureCategory =
+  | "configuration_error"
   | "invalid_stream_record"
   | "invalid_domain_event"
   | "sqs_send_failed"

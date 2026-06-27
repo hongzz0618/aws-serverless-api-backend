@@ -72,10 +72,14 @@ resource "aws_iam_role_policy" "item_created_dispatcher" {
         Action = [
           "dynamodb:DescribeStream",
           "dynamodb:GetRecords",
-          "dynamodb:GetShardIterator",
-          "dynamodb:ListStreams"
+          "dynamodb:GetShardIterator"
         ]
         Resource = aws_dynamodb_table.items.stream_arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["dynamodb:ListStreams"]
+        Resource = "*"
       },
       {
         Effect   = "Allow"

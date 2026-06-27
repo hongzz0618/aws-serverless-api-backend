@@ -152,6 +152,51 @@ describe("processItemCreated handler", () => {
     );
   });
 
+  it("treats item_no_longer_exists as success without retrying or logging payloads", async () => {
+    const sensitive = "SECRET-CUSTOMER-NAME";
+    const processor = vi.fn<ProcessItemCreatedEvent>().mockResolvedValue({
+      status: "item_no_longer_exists",
+    });
+    const handler = createHandler(processor);
+
+    await expect(
+      handler(
+        sqsEvent([
+          sqsRecord({
+            messageId: "message-1",
+            receiveCount: "3",
+            body: JSON.stringify(
+              validEvent({
+                data: {
+                  itemId,
+                  name: sensitive,
+                },
+              })
+            ),
+          }),
+        ])
+      )
+    ).resolves.toEqual({ batchItemFailures: [] });
+
+    const logs = loggedJson();
+    expect(logs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "item_processing_skipped",
+          reason: "item_deleted_before_processing",
+          eventId: `item.created.v1:${itemId}`,
+          itemId,
+          messageId: "message-1",
+          attempt: 3,
+        }),
+      ])
+    );
+    const serializedLogs = JSON.stringify(logs);
+    expect(serializedLogs).not.toContain(sensitive);
+    expect(serializedLogs).not.toContain("body");
+    expect(serializedLogs).not.toContain("MessageBody");
+  });
+
   it("returns only retryable and permanent processing failures in a mixed batch", async () => {
     const processor = vi
       .fn<ProcessItemCreatedEvent>()
@@ -161,6 +206,7 @@ describe("processItemCreated handler", () => {
         reason: "dynamodb_error",
       })
       .mockResolvedValueOnce({ status: "already_processed" })
+      .mockResolvedValueOnce({ status: "item_no_longer_exists" })
       .mockResolvedValueOnce({
         status: "permanent_failure",
         reason: "different_event_already_processed",
@@ -174,12 +220,13 @@ describe("processItemCreated handler", () => {
           sqsRecord({ messageId: "message-b" }),
           sqsRecord({ messageId: "message-c" }),
           sqsRecord({ messageId: "message-d" }),
+          sqsRecord({ messageId: "message-e" }),
         ])
       )
     ).resolves.toEqual({
       batchItemFailures: [
         { itemIdentifier: "message-b" },
-        { itemIdentifier: "message-d" },
+        { itemIdentifier: "message-e" },
       ],
     });
   });

@@ -9,7 +9,6 @@ import type { ItemCreatedEventV1 } from "../events/itemCreated.js";
 import { createCreationMetadata } from "./itemMetadata.js";
 
 export type ProcessingFailureReason =
-  | "item_not_found"
   | "invalid_processing_state"
   | "different_event_already_processed"
   | "conditional_state_unresolved"
@@ -19,6 +18,7 @@ export type ProcessingFailureReason =
 export type ProcessingResult =
   | { status: "processed" }
   | { status: "already_processed" }
+  | { status: "item_no_longer_exists" }
   | {
       status: "retryable_failure";
       reason: ProcessingFailureReason;
@@ -83,10 +83,7 @@ const resolveConditionalFailure = async ({
   }
 
   if (!current.Item) {
-    return {
-      status: "permanent_failure",
-      reason: "item_not_found",
-    };
+    return { status: "item_no_longer_exists" };
   }
 
   const { processingStatus, processedEventId } = getProcessingState(current.Item);

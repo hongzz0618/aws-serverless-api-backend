@@ -16,6 +16,12 @@ The cycle validated both infrastructure behavior and runtime API behavior. Autom
 
 Runtime behavior was validated at commit `c904ea2`. Subsequent commits were limited to destroy cleanup, regression-test alignment, Terraform and CI version alignment, package metadata, and documentation; the validated Lambda runtime behavior did not change.
 
+### Scope note for async features
+
+This evidence predates the asynchronous Stream -> Dispatcher -> SQS -> Worker -> DLQ flow. It validates the synchronous CRUD API, idempotency behavior, optimistic locking, and original observability resources only.
+
+The screenshots and deployment record must not be interpreted as proof that the new async chain has been validated in AWS. The async path will be validated separately during the next real AWS deployment. The historical evidence is retained as-is, and no new deployment result is claimed here.
+
 ## Runtime scenarios verified
 
 The runtime smoke test verified the main API behavior against the deployed AWS environment:

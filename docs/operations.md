@@ -225,6 +225,182 @@ Application-level idempotency failures are also surfaced through the create Lamb
 
 Alarm notifications are optional and controlled by the Terraform `alarm_actions` variable. Without configured actions, alarms still change state but do not notify a recipient.
 
+## Async Architecture Summary
+
+The asynchronous item-processing path is:
+
+```text
+POST /items
+-> Items DynamoDB Stream
+-> Dispatcher Lambda
+-> SQS standard queue
+-> Worker Lambda
+-> Item processingStatus = COMPLETED
+-> repeated failures reach the DLQ
+```
+
+The `creationMetadata` field is a snapshot derived from the item name at creation time. Later `PUT` requests do not recalculate that snapshot, and the worker does not modify the public API `version` field.
+
+## Async Post-Deployment Validation
+
+After deploying to AWS, retrieve the outputs needed for async validation:
+
+```bash
+cd terraform
+
+API_URL="$(terraform output -raw api_url)"
+ITEMS_TABLE="$(terraform output -raw items_table_name)"
+QUEUE_URL="$(terraform output -raw item_processing_queue_url)"
+DLQ_URL="$(terraform output -raw item_processing_dlq_url)"
+```
+
+Create a test item with a unique idempotency key:
+
+```bash
+curl -sS -X POST "$API_URL/items" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: async-validation-<unique-value>" \
+  -d '{"name":"Async Validation Item"}'
+```
+
+Record the item ID from the JSON response. Poll DynamoDB directly until the worker has completed processing:
+
+```bash
+aws dynamodb get-item \
+  --table-name "$ITEMS_TABLE" \
+  --key '{"id":{"S":"<ITEM_ID>"}}' \
+  --consistent-read
+```
+
+Expected internal state:
+
+* `processingStatus` is `COMPLETED`
+* `processedEventId` is `item.created.v1:<ITEM_ID>`
+* `processedAt` exists
+* `creationMetadata.normalizedName` is `async validation item`
+* `creationMetadata.nameLength` matches the original creation name
+
+Do not use the public `GET /items/{id}` API to validate internal processing fields; that route intentionally exposes the public item contract only.
+
+## Inspect Async Logs
+
+Tail the dispatcher and worker log groups:
+
+```bash
+aws logs tail "$(terraform output -raw item_created_dispatcher_log_group_name)" --follow
+```
+
+```bash
+aws logs tail "$(terraform output -raw item_processing_worker_log_group_name)" --follow
+```
+
+Key async events:
+
+| Event                          | Meaning                                                       |
+| ------------------------------ | ------------------------------------------------------------- |
+| `item_created_dispatched`      | Dispatcher sent an item-created event to SQS                  |
+| `item_created_dispatch_failed` | Dispatcher could not transform a record or send it to SQS     |
+| `item_processing_completed`    | Worker completed metadata processing for an item              |
+| `duplicate_event_ignored`      | Worker saw an event already processed for that item           |
+| `item_processing_skipped`      | Item was deleted before the worker processed it               |
+| `item_processing_failed`       | Worker could not process a message and returned a failure     |
+
+Useful correlation fields include:
+
+* `requestId`
+* `eventId`
+* `itemId`
+* `messageId`
+* `attempt`
+* `failureCategory`
+* `retryable`
+
+## Queue and DLQ Inspection
+
+Inspect the main queue:
+
+```bash
+aws sqs get-queue-attributes \
+  --queue-url "$(terraform output -raw item_processing_queue_url)" \
+  --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible
+```
+
+Inspect the DLQ:
+
+```bash
+aws sqs get-queue-attributes \
+  --queue-url "$(terraform output -raw item_processing_dlq_url)" \
+  --attribute-names ApproximateNumberOfMessages
+```
+
+SQS queue counts are approximate and should not be treated as strict real-time counters.
+
+## DLQ Investigation
+
+Do not immediately redrive messages just because the DLQ is non-empty. First identify the failure category and root cause, then fix configuration, IAM, event-contract, runtime, or data-state issues before moving messages back to the main queue.
+
+Do not delete DLQ messages before investigation. Receiving a message temporarily changes its visibility timeout, so use a short visibility timeout for inspection:
+
+```bash
+aws sqs receive-message \
+  --queue-url "$(terraform output -raw item_processing_dlq_url)" \
+  --max-number-of-messages 1 \
+  --visibility-timeout 30 \
+  --attribute-names All
+```
+
+Examples should not print real sensitive payloads. Demo events contain only item ID and name, but production operators should still handle message bodies carefully.
+
+## DLQ Redrive
+
+Only redrive after the root cause is understood and fixed. Retrieve the queue ARNs from Terraform outputs:
+
+```bash
+DLQ_ARN="$(terraform output -raw item_processing_dlq_arn)"
+QUEUE_ARN="$(terraform output -raw item_processing_queue_arn)"
+```
+
+Start a move task:
+
+```bash
+aws sqs start-message-move-task \
+  --source-arn "$DLQ_ARN" \
+  --destination-arn "$QUEUE_ARN"
+```
+
+Redrive triggers the worker again. The worker's idempotent logic ignores the same event if it has already been successfully processed. Validate redrive behavior in a non-production environment first, then re-check the DLQ, worker logs, and item state after the move task runs.
+
+## Async Failure Troubleshooting
+
+| Symptom                             | Possible cause                                            | Checks                                                     |
+| ----------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------- |
+| Item remains `PENDING`              | Stream, dispatcher, IAM, SQS, or worker failure           | Check dispatcher logs, queue depth, worker logs, and IAM   |
+| Dispatcher failure metric increases | Invalid stream record, configuration, or SQS send failure | Inspect `failureCategory` and dispatcher request logs      |
+| Worker retryable failures increase  | Temporary DynamoDB or runtime dependency failure          | Check `retryable`, `attempt`, and DynamoDB service health  |
+| Worker permanent failure increases  | Invalid event or conflicting stored state                 | Inspect the event ID, item ID, and stored processing state |
+| `item_processing_skipped` increases | Item deleted before worker processed it                   | Confirm deletes are expected for the affected item IDs     |
+| Queue age increases                 | Worker blocked, throttled, disabled, or failing           | Check worker throttles, errors, and queue visibility       |
+| Iterator age increases              | Dispatcher cannot progress through a stream shard         | Check dispatcher failures and DynamoDB stream records      |
+| DLQ contains messages               | Message failed repeatedly and needs investigation         | Inspect DLQ messages before any redrive                    |
+
+## DynamoDB Stream Retry Semantics
+
+The dispatcher event-source mapping uses `ReportBatchItemFailures`. DynamoDB Streams uses the lowest failed sequence number as the retry checkpoint. Records after that checkpoint may be delivered again even if they already succeeded, so the dispatcher may send the same event more than once.
+
+The worker uses a stable `eventId` and conditional writes to keep item processing idempotent.
+
+## Known Stream Limitation
+
+The DynamoDB Stream mapping currently has no finite retry count and no stream on-failure destination. A poison record that keeps failing can block its shard until the record expires. IteratorAge and dispatcher handled-failure alarms are the operational signals for this trade-off.
+
+This first async version accepts that limitation to keep the service count small. Do not add a second failure queue unless the architecture is intentionally changed in a later phase.
+
+## Async Alarm Interpretation
+
+CloudWatch Lambda `Errors` measure failed invocations. Handled record failures emitted through `batchItemFailures` can occur while the Lambda invocation itself completes successfully, so they do not always increase Lambda `Errors`.
+
+The async log-based metrics added for dispatcher and worker failures provide earlier application-level signals. Queue age and DLQ alarms are final protection signals and should not be the only early warning mechanism.
+
 ## Troubleshooting
 
 | Symptom                     | Likely cause                                                                                                       | Checks                                                                                                          |

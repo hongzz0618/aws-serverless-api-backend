@@ -1,8 +1,9 @@
 mock_provider "aws" {}
 
 variables {
-  region       = "us-east-1"
-  project_name = "serverless-api"
+  region        = "us-east-1"
+  project_name  = "serverless-api"
+  alarm_actions = ["arn:aws:sns:us-east-1:123456789012:serverless-api-alerts"]
 }
 
 override_resource {
@@ -607,6 +608,45 @@ run "async_alarm_contract" {
 
   assert {
     condition = (
+      aws_cloudwatch_log_metric_filter.async_application_events["dispatcher_failure"].log_group_name == aws_cloudwatch_log_group.item_created_dispatcher.name &&
+      aws_cloudwatch_log_metric_filter.async_application_events["dispatcher_failure"].metric_transformation[0].name == "ItemCreatedDispatchFailureCount" &&
+      aws_cloudwatch_log_metric_filter.async_application_events["dispatcher_failure"].metric_transformation[0].namespace == "${var.project_name}/ItemsApi" &&
+      aws_cloudwatch_log_metric_filter.async_application_events["dispatcher_failure"].pattern == "{ $.event = \"item_created_dispatch_failed\" }"
+    )
+    error_message = "The dispatcher handled-failure metric filter must use the dispatcher log group and expected metric."
+  }
+
+  assert {
+    condition = alltrue([
+      aws_cloudwatch_log_metric_filter.async_application_events["worker_success"].log_group_name == aws_cloudwatch_log_group.item_processing_worker.name,
+      aws_cloudwatch_log_metric_filter.async_application_events["worker_success"].metric_transformation[0].name == "ItemProcessingSuccessCount",
+      aws_cloudwatch_log_metric_filter.async_application_events["worker_duplicate"].metric_transformation[0].name == "ItemProcessingDuplicateCount",
+      aws_cloudwatch_log_metric_filter.async_application_events["worker_skipped"].metric_transformation[0].name == "ItemProcessingSkippedCount"
+    ])
+    error_message = "Worker success, duplicate, and skipped metric filters must use the worker log group and expected metric names."
+  }
+
+  assert {
+    condition = (
+      aws_cloudwatch_log_metric_filter.async_application_events["worker_retryable_failure"].pattern == "{ $.event = \"item_processing_failed\" && $.retryable = true }" &&
+      aws_cloudwatch_log_metric_filter.async_application_events["worker_permanent_failure"].pattern == "{ $.event = \"item_processing_failed\" && $.retryable = false }" &&
+      aws_cloudwatch_log_metric_filter.async_application_events["worker_retryable_failure"].metric_transformation[0].name == "ItemProcessingRetryableFailureCount" &&
+      aws_cloudwatch_log_metric_filter.async_application_events["worker_permanent_failure"].metric_transformation[0].name == "ItemProcessingPermanentFailureCount"
+    )
+    error_message = "Worker retryable and permanent failure metric filters must use distinct retryable patterns and metric names."
+  }
+
+  assert {
+    condition = alltrue([
+      for filter in values(aws_cloudwatch_log_metric_filter.async_application_events) :
+      filter.metric_transformation[0].namespace == "${var.project_name}/ItemsApi" &&
+      filter.metric_transformation[0].value == "1"
+    ])
+    error_message = "Async application metric filters must use the shared namespace and emit count value 1."
+  }
+
+  assert {
+    condition = (
       aws_cloudwatch_metric_alarm.item_processing_dlq_visible_messages[0].namespace == "AWS/SQS" &&
       aws_cloudwatch_metric_alarm.item_processing_dlq_visible_messages[0].metric_name == "ApproximateNumberOfMessagesVisible" &&
       aws_cloudwatch_metric_alarm.item_processing_dlq_visible_messages[0].threshold == 1
@@ -631,5 +671,100 @@ run "async_alarm_contract" {
       aws_cloudwatch_metric_alarm.item_created_dispatcher_iterator_age[0].threshold == 300000
     ])
     error_message = "Async Lambda error and iterator age alarms must be present."
+  }
+
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.item_created_dispatch_failures[0].metric_name == "ItemCreatedDispatchFailureCount" &&
+      aws_cloudwatch_metric_alarm.item_created_dispatch_failures[0].threshold == 1 &&
+      aws_cloudwatch_metric_alarm.item_created_dispatch_failures[0].period == 300 &&
+      length(aws_cloudwatch_metric_alarm.item_created_dispatch_failures[0].alarm_actions) == length(var.alarm_actions) &&
+      alltrue([for action in var.alarm_actions : contains(aws_cloudwatch_metric_alarm.item_created_dispatch_failures[0].alarm_actions, action)]) &&
+      aws_cloudwatch_metric_alarm.item_created_dispatch_failures[0].treat_missing_data == "notBreaching"
+    )
+    error_message = "The dispatcher handled-failure alarm must fire on one handled dispatch failure and use configured alarm actions."
+  }
+
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.item_processing_permanent_failures[0].metric_name == "ItemProcessingPermanentFailureCount" &&
+      aws_cloudwatch_metric_alarm.item_processing_permanent_failures[0].threshold == 1 &&
+      aws_cloudwatch_metric_alarm.item_processing_permanent_failures[0].period == 300 &&
+      length(aws_cloudwatch_metric_alarm.item_processing_permanent_failures[0].alarm_actions) == length(var.alarm_actions) &&
+      alltrue([for action in var.alarm_actions : contains(aws_cloudwatch_metric_alarm.item_processing_permanent_failures[0].alarm_actions, action)]) &&
+      aws_cloudwatch_metric_alarm.item_processing_permanent_failures[0].treat_missing_data == "notBreaching"
+    )
+    error_message = "The worker permanent-failure alarm must fire on one non-retryable processing failure."
+  }
+
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.item_processing_retryable_failures[0].metric_name == "ItemProcessingRetryableFailureCount" &&
+      aws_cloudwatch_metric_alarm.item_processing_retryable_failures[0].threshold == 3 &&
+      aws_cloudwatch_metric_alarm.item_processing_retryable_failures[0].period == 900 &&
+      length(aws_cloudwatch_metric_alarm.item_processing_retryable_failures[0].alarm_actions) == length(var.alarm_actions) &&
+      alltrue([for action in var.alarm_actions : contains(aws_cloudwatch_metric_alarm.item_processing_retryable_failures[0].alarm_actions, action)]) &&
+      aws_cloudwatch_metric_alarm.item_processing_retryable_failures[0].treat_missing_data == "notBreaching"
+    )
+    error_message = "The worker retryable-failure alarm must watch a 15-minute window before alarming."
+  }
+
+  assert {
+    condition = alltrue([
+      for alarm in values(aws_cloudwatch_metric_alarm.async_lambda_throttles) :
+      alarm.namespace == "AWS/Lambda" &&
+      alarm.metric_name == "Throttles" &&
+      alarm.statistic == "Sum" &&
+      alarm.period == 300 &&
+      alarm.threshold == 1 &&
+      length(alarm.alarm_actions) == length(var.alarm_actions) &&
+      alltrue([for action in var.alarm_actions : contains(alarm.alarm_actions, action)]) &&
+      alarm.treat_missing_data == "notBreaching"
+    ])
+    error_message = "Async Lambda throttle alarms must use the Lambda Throttles metric and configured alarm actions."
+  }
+
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.async_lambda_throttles["dispatcher"].dimensions.FunctionName == aws_lambda_function.item_created_dispatcher.function_name &&
+      aws_cloudwatch_metric_alarm.async_lambda_throttles["worker"].dimensions.FunctionName == aws_lambda_function.item_processing_worker.function_name
+    )
+    error_message = "Both async Lambda functions must have throttle alarms."
+  }
+
+  assert {
+    condition = alltrue([
+      contains(output.cloudwatch_alarm_names, aws_cloudwatch_metric_alarm.item_created_dispatch_failures[0].alarm_name),
+      contains(output.cloudwatch_alarm_names, aws_cloudwatch_metric_alarm.item_processing_permanent_failures[0].alarm_name),
+      contains(output.cloudwatch_alarm_names, aws_cloudwatch_metric_alarm.item_processing_retryable_failures[0].alarm_name),
+      contains(output.cloudwatch_alarm_names, aws_cloudwatch_metric_alarm.async_lambda_throttles["dispatcher"].alarm_name),
+      contains(output.cloudwatch_alarm_names, aws_cloudwatch_metric_alarm.async_lambda_throttles["worker"].alarm_name)
+    ])
+    error_message = "CloudWatch alarm outputs must include the async handled-failure and throttle alarms."
+  }
+}
+
+run "async_output_contract" {
+  command = plan
+
+  assert {
+    condition = (
+      output.items_table_name == aws_dynamodb_table.items.name &&
+      output.item_processing_queue_url == aws_sqs_queue.item_processing.url &&
+      output.item_processing_queue_arn == aws_sqs_queue.item_processing.arn &&
+      output.item_processing_dlq_url == aws_sqs_queue.item_processing_dlq.id &&
+      output.item_processing_dlq_arn == aws_sqs_queue.item_processing_dlq.arn
+    )
+    error_message = "Async queue and table outputs must reference the Terraform-managed resources."
+  }
+
+  assert {
+    condition = (
+      output.item_created_dispatcher_function_name == aws_lambda_function.item_created_dispatcher.function_name &&
+      output.item_processing_worker_function_name == aws_lambda_function.item_processing_worker.function_name &&
+      output.item_created_dispatcher_log_group_name == aws_cloudwatch_log_group.item_created_dispatcher.name &&
+      output.item_processing_worker_log_group_name == aws_cloudwatch_log_group.item_processing_worker.name
+    )
+    error_message = "Async Lambda and log group outputs must reference the Terraform-managed resources."
   }
 }

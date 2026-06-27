@@ -5,9 +5,11 @@ locals {
 
 # DynamoDB Table
 resource "aws_dynamodb_table" "items" {
-  name         = "${var.project_name}-items"
-  billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "id"
+  name             = "${var.project_name}-items"
+  billing_mode     = "PAY_PER_REQUEST"
+  hash_key         = "id"
+  stream_enabled   = true
+  stream_view_type = "NEW_IMAGE"
 
   attribute {
     name = "id"

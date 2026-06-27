@@ -83,6 +83,19 @@ export const parsePackagingScript = async (repoRoot) => {
   return entries;
 };
 
+const readTerraformSource = async (repoRoot) => {
+  const terraformDir = join(repoRoot, "terraform");
+  const terraformFiles = (await fs.readdir(terraformDir))
+    .filter((name) => name.endsWith(".tf"))
+    .sort();
+  assert(terraformFiles.length > 0, "No Terraform files found");
+
+  const sources = await Promise.all(
+    terraformFiles.map((name) => readText(join(terraformDir, name)))
+  );
+  return sources.join("\n");
+};
+
 const extractTerraformBlocks = (source, type) => {
   const blocks = [];
   const pattern = new RegExp(`resource\\s+"${type}"\\s+"([^"]+)"\\s+\\{`, "g");
@@ -118,7 +131,7 @@ const terraformZipBasename = (value) => {
 };
 
 export const parseTerraformLambdas = async (repoRoot) => {
-  const source = stripCommentOnlyLines(await readText(join(repoRoot, "terraform/main.tf")));
+  const source = stripCommentOnlyLines(await readTerraformSource(repoRoot));
   const lambdas = extractTerraformBlocks(source, "aws_lambda_function").map((block) => {
     const handler = unquote(terraformAttr(block.body, "handler"));
     const runtime = unquote(terraformAttr(block.body, "runtime"));

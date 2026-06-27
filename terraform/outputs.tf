@@ -14,6 +14,11 @@ output "cloudwatch_alarm_names" {
     aws_cloudwatch_metric_alarm.api_5xx_errors[*].alarm_name,
     aws_cloudwatch_metric_alarm.api_4xx_errors[*].alarm_name,
     aws_cloudwatch_metric_alarm.api_latency[*].alarm_name,
-    aws_cloudwatch_metric_alarm.dynamodb_system_errors[*].alarm_name
+    aws_cloudwatch_metric_alarm.dynamodb_system_errors[*].alarm_name,
+    aws_cloudwatch_metric_alarm.item_processing_dlq_visible_messages[*].alarm_name,
+    aws_cloudwatch_metric_alarm.item_processing_queue_age[*].alarm_name,
+    aws_cloudwatch_metric_alarm.item_created_dispatcher_errors[*].alarm_name,
+    aws_cloudwatch_metric_alarm.item_processing_worker_errors[*].alarm_name,
+    aws_cloudwatch_metric_alarm.item_created_dispatcher_iterator_age[*].alarm_name
   ) : []
 }

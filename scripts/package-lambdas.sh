@@ -15,6 +15,8 @@ package_prod_dir="$lambda_dir/.package-prod"
 
 required_files=(
   "createItem.ts"
+  "dispatchItemCreated.ts"
+  "processItemCreated.ts"
   "getItem.ts"
   "updateItem.ts"
   "deleteItem.ts"
@@ -25,6 +27,8 @@ required_files=(
 
 handlers=(
   "dist/createItem.js:createItem.zip"
+  "dist/dispatchItemCreated.js:dispatchItemCreated.zip"
+  "dist/processItemCreated.js:processItemCreated.zip"
   "dist/getItem.js:getItem.zip"
   "dist/updateItem.js:updateItem.zip"
   "dist/deleteItem.js:deleteItem.zip"
@@ -32,6 +36,8 @@ handlers=(
 
 target_packages=(
   "createItem.zip"
+  "dispatchItemCreated.zip"
+  "processItemCreated.zip"
   "getItem.zip"
   "updateItem.zip"
   "deleteItem.zip"

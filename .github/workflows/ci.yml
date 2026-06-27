@@ -81,6 +81,8 @@ jobs:
             lambdas/getItem.zip
             lambdas/updateItem.zip
             lambdas/deleteItem.zip
+            lambdas/dispatchItemCreated.zip
+            lambdas/processItemCreated.zip
             lambdas/artifacts-manifest.json
           if-no-files-found: error
           retention-days: 7

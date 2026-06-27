@@ -187,7 +187,7 @@ resource "aws_lambda_function" "item_processing_worker" {
 resource "aws_lambda_event_source_mapping" "item_created_dispatcher" {
   event_source_arn               = aws_dynamodb_table.items.stream_arn
   function_name                  = aws_lambda_function.item_created_dispatcher.arn
-  enabled                        = false
+  enabled                        = true
   starting_position              = "LATEST"
   batch_size                     = 10
   bisect_batch_on_function_error = true

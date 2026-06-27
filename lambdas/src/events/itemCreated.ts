@@ -4,6 +4,9 @@ import { ITEM_NAME_MAX_LENGTH } from "../validation/item.js";
 const itemCreatedEventIdPrefix = "item.created.v1:";
 const uuidSchema = z.uuid();
 
+export const createItemCreatedEventId = (itemId: string): string =>
+  `${itemCreatedEventIdPrefix}${itemId}`;
+
 export const itemCreatedEventV1Schema = z
   .object({
     eventId: z.string().refine(

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createItemCreatedEventId,
   type ItemCreatedEventV1,
   parseItemCreatedEventV1,
 } from "../../src/events/itemCreated.js";
@@ -89,6 +90,32 @@ describe("ItemCreatedEventV1 contract", () => {
 });
 
 describe("ItemCreatedEventV1 event id validation", () => {
+  it("creates a deterministic event id from an item id", () => {
+    expect(createItemCreatedEventId(itemId)).toBe(
+      `item.created.v1:${itemId}`
+    );
+    expect(createItemCreatedEventId(itemId)).toBe(
+      createItemCreatedEventId(itemId)
+    );
+  });
+
+  it("creates different event ids for different item ids", () => {
+    const otherItemId = "660e8400-e29b-41d4-a716-446655440000";
+
+    expect(createItemCreatedEventId(otherItemId)).not.toBe(
+      createItemCreatedEventId(itemId)
+    );
+  });
+
+  it("creates event ids that satisfy the event schema", () => {
+    const result = parseItemCreatedEventV1({
+      ...validEvent(),
+      eventId: createItemCreatedEventId(itemId),
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("accepts the item.created.v1 UUID event id format", () => {
     const result = parseItemCreatedEventV1(validEvent());
 

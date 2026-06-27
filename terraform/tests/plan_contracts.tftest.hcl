@@ -553,14 +553,14 @@ run "async_event_source_mapping_contract" {
 
   assert {
     condition = (
-      aws_lambda_event_source_mapping.item_created_dispatcher.enabled == false &&
+      aws_lambda_event_source_mapping.item_created_dispatcher.enabled == true &&
       aws_lambda_event_source_mapping.item_created_dispatcher.starting_position == "LATEST" &&
       aws_lambda_event_source_mapping.item_created_dispatcher.batch_size == 10 &&
       aws_lambda_event_source_mapping.item_created_dispatcher.bisect_batch_on_function_error == true &&
       length(aws_lambda_event_source_mapping.item_created_dispatcher.function_response_types) == 1 &&
       contains(aws_lambda_event_source_mapping.item_created_dispatcher.function_response_types, "ReportBatchItemFailures")
     )
-    error_message = "The dispatcher event source mapping must be disabled and configured for safe partial batch retries."
+    error_message = "The dispatcher event source mapping must be enabled and configured for safe partial batch retries."
   }
 
   assert {

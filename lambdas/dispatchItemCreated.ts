@@ -1,29 +1,75 @@
-import type {
-  DynamoDBBatchResponse,
-  DynamoDBRecord,
-  DynamoDBStreamEvent,
-} from "aws-lambda";
+import type { DynamoDBBatchResponse, DynamoDBStreamEvent } from "aws-lambda";
+import { SendMessageCommand, SQSClient } from "@aws-sdk/client-sqs";
+import {
+  dispatchItemCreatedRecords,
+  type ItemCreatedEventSender,
+} from "./src/dispatch/itemCreatedDispatcher.js";
+import type { ItemCreatedEventV1 } from "./src/events/itemCreated.js";
+import { getRequiredEnv } from "./src/utils/env.js";
+import { createLogger } from "./src/utils/logger.js";
 
-const sequenceNumberFailureId = (record: DynamoDBRecord): string =>
-  record.dynamodb?.SequenceNumber ?? "";
+const sqsClient = new SQSClient();
 
-export const handler = async (
-  event: DynamoDBStreamEvent
-): Promise<DynamoDBBatchResponse> => {
-  console.log(
-    JSON.stringify({
-      timestamp: new Date().toISOString(),
-      level: "warn",
+class SqsItemCreatedEventSender implements ItemCreatedEventSender {
+  constructor(private readonly queueUrl: string) {}
+
+  async send(event: ItemCreatedEventV1): Promise<void> {
+    await sqsClient.send(
+      new SendMessageCommand({
+        QueueUrl: this.queueUrl,
+        MessageBody: JSON.stringify(event),
+      })
+    );
+  }
+}
+
+export const createDispatchItemCreatedHandler =
+  ({
+    senderFactory = (queueUrl: string): ItemCreatedEventSender =>
+      new SqsItemCreatedEventSender(queueUrl),
+  }: {
+    senderFactory?: (queueUrl: string) => ItemCreatedEventSender;
+  } = {}) =>
+  async (event: DynamoDBStreamEvent): Promise<DynamoDBBatchResponse> => {
+    const logger = createLogger({
       service: "items-api",
       operation: "dispatchItemCreated",
-      message: "Dispatcher placeholder invoked without business processing enabled",
-      recordCount: event.Records.length,
-    })
-  );
+    });
 
-  return {
-    batchItemFailures: event.Records.map((record) => ({
-      itemIdentifier: sequenceNumberFailureId(record),
-    })),
+    const sequenceNumbersByIndex = event.Records.map((record) => {
+      const sequenceNumber = record.dynamodb?.SequenceNumber;
+
+      if (!sequenceNumber) {
+        throw new Error("DynamoDB stream record is missing SequenceNumber");
+      }
+
+      return sequenceNumber;
+    });
+
+    let sender: ItemCreatedEventSender;
+
+    try {
+      sender = senderFactory(getRequiredEnv("ITEM_PROCESSING_QUEUE_URL"));
+    } catch (err) {
+      logger.error("Item-created dispatcher configuration failed", err, {
+        event: "item_created_dispatch_failed",
+        failureCategory: "sqs_send_failed",
+      });
+
+      return {
+        batchItemFailures: event.Records.flatMap((record, index) =>
+          record.eventName === "INSERT"
+            ? [{ itemIdentifier: sequenceNumbersByIndex[index] }]
+            : []
+        ),
+      };
+    }
+
+    return dispatchItemCreatedRecords({
+      records: event.Records,
+      sender,
+      logger,
+    });
   };
-};
+
+export const handler = createDispatchItemCreatedHandler();

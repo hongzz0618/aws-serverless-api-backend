@@ -365,6 +365,7 @@ describe("createItem handler", () => {
                 Item: expect.objectContaining({
                   name: { S: "Example item" },
                   version: { N: "1" },
+                  processingStatus: { S: "PENDING" },
                 }),
               }),
             }),
@@ -748,6 +749,15 @@ describe("getItem handler", () => {
         name: { S: "Example item" },
         createdAt: { S: "2026-05-14T10:00:00.000Z" },
         version: { N: "3" },
+        processingStatus: { S: "COMPLETED" },
+        processedEventId: { S: "item.created.v1:00000000-0000-4000-8000-000000000001" },
+        processedAt: { S: "2026-05-14T10:00:01.000Z" },
+        creationMetadata: {
+          M: {
+            normalizedName: { S: "example item" },
+            nameLength: { N: "12" },
+          },
+        },
       },
     });
     const { handler } = await import("../getItem.js");
@@ -902,6 +912,11 @@ describe("updateItem handler", () => {
       version: 3,
     });
     expect(dynamoMock.send).toHaveBeenCalledTimes(2);
+    const updateCommandInput = dynamoMock.send.mock.calls[1]?.[0].input;
+    expect(JSON.stringify(updateCommandInput)).not.toContain("processingStatus");
+    expect(JSON.stringify(updateCommandInput)).not.toContain("processedEventId");
+    expect(JSON.stringify(updateCommandInput)).not.toContain("processedAt");
+    expect(JSON.stringify(updateCommandInput)).not.toContain("creationMetadata");
   });
 
   it("uses a consistent read for the pre-read", async () => {

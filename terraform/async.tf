@@ -210,7 +210,7 @@ resource "aws_lambda_event_source_mapping" "item_created_dispatcher" {
 resource "aws_lambda_event_source_mapping" "item_processing_worker" {
   event_source_arn        = aws_sqs_queue.item_processing.arn
   function_name           = aws_lambda_function.item_processing_worker.arn
-  enabled                 = false
+  enabled                 = true
   batch_size              = 5
   function_response_types = ["ReportBatchItemFailures"]
 

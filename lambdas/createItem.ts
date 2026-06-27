@@ -142,6 +142,7 @@ export const handler = async (
       name: { S: validation.value.name },
       createdAt: { S: new Date().toISOString() },
       version: { N: "1" },
+      processingStatus: { S: "PENDING" },
     };
     const response: CreateItemResponse = {
       message: "Item created",

@@ -578,13 +578,13 @@ run "async_event_source_mapping_contract" {
 
   assert {
     condition = (
-      aws_lambda_event_source_mapping.item_processing_worker.enabled == false &&
+      aws_lambda_event_source_mapping.item_processing_worker.enabled == true &&
       aws_lambda_event_source_mapping.item_processing_worker.batch_size == 5 &&
       length(aws_lambda_event_source_mapping.item_processing_worker.function_response_types) == 1 &&
       contains(aws_lambda_event_source_mapping.item_processing_worker.function_response_types, "ReportBatchItemFailures") &&
       aws_lambda_event_source_mapping.item_processing_worker.scaling_config[0].maximum_concurrency == 2
     )
-    error_message = "The worker event source mapping must be disabled, partial-batch aware, and concurrency-limited."
+    error_message = "The worker event source mapping must be enabled, partial-batch aware, and concurrency-limited."
   }
 }
 

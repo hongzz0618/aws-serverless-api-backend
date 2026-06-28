@@ -446,11 +446,6 @@ run "async_lambda_contract" {
   }
 
   assert {
-    condition     = aws_lambda_function.item_processing_worker.reserved_concurrent_executions == 5
-    error_message = "The item processing worker must reserve concurrency at 5."
-  }
-
-  assert {
     condition = alltrue([
       aws_lambda_function.item_created_dispatcher.filename == "${path.module}/../lambdas/dispatchItemCreated.zip",
       aws_lambda_function.item_processing_worker.filename == "${path.module}/../lambdas/processItemCreated.zip",

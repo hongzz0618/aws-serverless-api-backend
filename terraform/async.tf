@@ -3,7 +3,6 @@ locals {
   item_processing_queue_retention_seconds          = 4 * 24 * 60 * 60
   item_processing_dlq_retention_seconds            = 14 * 24 * 60 * 60
   item_processing_max_receive_count                = 5
-  item_processing_worker_reserved_concurrency      = 5
   item_processing_worker_maximum_concurrency       = 2
 }
 
@@ -168,13 +167,12 @@ resource "aws_lambda_function" "item_created_dispatcher" {
 }
 
 resource "aws_lambda_function" "item_processing_worker" {
-  function_name                  = "${var.project_name}-item-processing-worker"
-  role                           = aws_iam_role.item_processing_worker.arn
-  handler                        = "processItemCreated.handler"
-  runtime                        = "nodejs22.x"
-  memory_size                    = local.lambda_memory_size
-  timeout                        = local.lambda_timeout_seconds
-  reserved_concurrent_executions = local.item_processing_worker_reserved_concurrency
+  function_name = "${var.project_name}-item-processing-worker"
+  role          = aws_iam_role.item_processing_worker.arn
+  handler       = "processItemCreated.handler"
+  runtime       = "nodejs22.x"
+  memory_size   = local.lambda_memory_size
+  timeout       = local.lambda_timeout_seconds
 
   filename         = "${path.module}/../lambdas/processItemCreated.zip"
   source_code_hash = filebase64sha256("${path.module}/../lambdas/processItemCreated.zip")

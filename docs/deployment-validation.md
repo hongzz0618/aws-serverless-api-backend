@@ -2,84 +2,163 @@
 
 ## Validation summary
 
-A complete real AWS deployment-validation-destroy cycle was executed for this serverless API in `eu-west-1`. The cycle followed the engineering loop:
+Two real AWS validation cycles were completed in `eu-west-1`.
 
-`Deploy → Observe → Diagnose → Correct → Add regression coverage → Redeploy → Verify → Destroy`
+| Cycle | Validated commit | Terraform-managed resources | Evidence |
+| --- | --- | ---: | --- |
+| Synchronous baseline | `c904ea2` | 58 | `01`-`05` |
+| Async processing extension | `30f14d4` | 87 final state | `06`-`12` |
 
-The deployment completed successfully, the runtime smoke test passed after a discovered IAM defect was corrected, observability signals were reviewed, and the environment was destroyed after validation. This record describes a completed validation cycle; the API is no longer deployed or publicly available.
+The async validation evidence records the final deployed Terraform state containing `87` managed resources. It does not mean all `87` resources were created by one uninterrupted Apply.
 
-## Scope and environment
+## Cycle 1 - Synchronous baseline
 
-The validation covered the Terraform-managed API Gateway, Lambda, DynamoDB, IAM, CloudWatch Logs, metric filters, and CloudWatch alarm resources for the project. Terraform managed `58` resources during the deployment in AWS region `eu-west-1`.
+### Scope
 
-The cycle validated both infrastructure behavior and runtime API behavior. Automated tests and Terraform plan-contract tests remained part of the project quality checks, while this document records the separate real AWS runtime validation.
+The first validation cycle covered the original synchronous API in AWS region `eu-west-1` at commit `c904ea2`.
 
-The synchronous runtime baseline was validated at commit `c904ea2`. Later asynchronous runtime changes are outside the scope of this historical validation record.
+Terraform managed `58` resources for API Gateway, the CRUD Lambda functions, DynamoDB tables, IAM, CloudWatch Logs, metric filters, and CloudWatch alarms.
 
-### Scope note for async features
+### Runtime scenarios
 
-This evidence predates the asynchronous Stream -> Dispatcher -> SQS -> Worker -> DLQ flow. It validates the synchronous CRUD API, idempotency behavior, optimistic locking, and original observability resources only.
+The deployed API was validated for:
 
-The screenshots and deployment record must not be interpreted as proof that the new async chain has been validated in AWS. The async path will be validated separately during the next real AWS deployment. The historical evidence is retained as-is, and no new deployment result is claimed here.
+- CRUD API behavior
+- Idempotent create replay
+- Idempotency conflict
+- Optimistic locking
+- Structured logs
+- Original CloudWatch alarms
 
-## Runtime scenarios verified
+An IAM defect in the create Lambda DynamoDB policy was discovered during runtime validation. The policy was corrected, regression coverage was added, and the smoke test was rerun successfully.
 
-The runtime smoke test verified the main API behavior against the deployed AWS environment:
+### Evidence
 
-- Item creation
-- Idempotent request replay
-- Idempotency-key conflict
-- Item retrieval
-- Optimistic-locking update
-- Stale-version conflict
-- Item deletion
-- Post-deletion `404`
+Evidence `01`-`05` records the synchronous deployment summary, smoke test result, structured logs, CloudWatch alarms, and destroy completion.
 
-The DynamoDB items table was verified to be empty after the smoke test completed.
+### Teardown
 
-## Observability verification
+Terraform destroy completed for the synchronous validation environment. The Terraform state resource count became zero after teardown.
 
-API Gateway access logs showed the expected `201`, `200`, `409`, and `404` responses for the smoke-test flow.
+## Cycle 2 - Async processing extension
 
-Lambda structured logs showed the expected idempotency and create-path events:
+### Deployment scope
 
-- `Idempotency key reserved`
-- `Item created`
-- `Idempotent create replayed`
-- `Idempotency key conflict`
+The second validation cycle covered the async processing architecture at commit `30f14d4`:
 
-CloudWatch alarms were created and verified as part of the deployed infrastructure.
+```text
+POST /items
+-> Items DynamoDB Table with Streams
+-> Dispatcher Lambda
+-> SQS Standard Queue
+-> Worker Lambda
+-> conditional update to processingStatus = COMPLETED
 
-## Defect discovered and correction
+Repeated failures
+-> DLQ
+-> investigation
+-> redrive to main queue
+```
 
-The initial runtime deployment exposed a real IAM defect in the Lambda DynamoDB permissions. The create flow uses a DynamoDB transaction, but DynamoDB transaction authorization requires the underlying item permissions used by each transaction statement.
+The public API remained:
 
-The IAM policy was corrected to authorize the required underlying item operations, including `PutItem` and `UpdateItem`, instead of relying on `dynamodb:TransactWriteItems`. Regression coverage was added for the corrected table-specific action sets. After the infrastructure was updated, the complete smoke test passed.
+```text
+POST /items
+GET /items/{id}
+PUT /items/{id}
+DELETE /items/{id}
+```
 
-## Cleanup and reproducibility
+The final Terraform-managed state contained `87` resources in `eu-west-1`.
 
-Terraform destroy completed successfully. All `58` Terraform-managed resources were destroyed, and the Terraform state resource count was verified as zero.
+### Partial Apply and recovery
 
-The API Gateway regional CloudWatch role configuration was reset during cleanup. A post-destroy Terraform plan showed that the environment remained reproducible and could create `58` resources again. GitHub CI was green at the end of the validation cycle.
+The first async Apply stopped when AWS rejected the Worker Lambda reserved-concurrency configuration.
+
+Observed facts:
+
+- AWS regional Lambda concurrency limit: `10`
+- Original Worker reserved concurrency: `5`
+- Terraform state contained `77` managed resources when the first Apply stopped
+- The Worker Lambda existed, was `Active`, and had no reserved concurrency configured
+- Terraform marked the Worker resource as tainted because resource creation did not complete cleanly
+
+The repository removed Worker reserved concurrency. The SQS event source mapping kept `maximum_concurrency = 2`.
+
+Before recovery, the live Lambda and Terraform state were inspected. The Worker was then untainted. The recovery plan was `10 add, 0 change, 0 destroy`, and the final Terraform-managed state contained `87` resources.
+
+The engineering decision was to rely on SQS event-source maximum concurrency for this path. It limits consumption for this queue without reserving part of the account-wide Lambda concurrency pool.
+
+This was an account-limit and Terraform recovery event, not an AWS outage or application-code failure.
+
+### Happy-path processing
+
+The async happy path was validated:
+
+- `POST /items` returned `201`
+- The item reached `processingStatus = COMPLETED`
+- `processedEventId` matched `item.created.v1:<itemId>`
+- `processedAt` existed
+- `creationMetadata` was created
+
+### Structured logs
+
+Dispatcher and Worker logs were reviewed.
+
+Observed application events included:
+
+- `item_created_dispatched`
+- `item_processing_completed`
+
+### Duplicate-event idempotency
+
+A duplicate event was delivered to the Worker.
+
+The Worker emitted `duplicate_event_ignored`. Duplicate processing did not change `processedAt`, `processedEventId`, or `version`.
+
+### Retry, DLQ, and alarm
+
+Retryable DynamoDB failures were observed. After repeated failures, a message reached the DLQ.
+
+The DLQ CloudWatch alarm reached `ALARM`.
+
+### Configuration restoration and redrive
+
+Worker configuration was restored. Terraform drift returned to zero.
+
+DLQ redrive was started. The affected item recovered from `PENDING` to `COMPLETED`.
+
+After processing completed, the main queue and DLQ became empty.
+
+### Synchronous regression smoke test
+
+The existing synchronous smoke test passed against the async deployment, confirming that the public CRUD API behavior still worked after the async extension was added.
+
+### Teardown
+
+Terraform destroyed the `87` managed resources. Terraform state became empty.
+
+API Gateway, Lambda, DynamoDB, the main queue, and the DLQ were confirmed removed.
 
 ## Evidence
 
-The deployment summary records the validated commit, AWS region, and the `58` Terraform-managed resources present during runtime validation.
+| File | Validation cycle | What it proves |
+| --- | --- | --- |
+| [`01-deployment-summary.png`](evidence/01-deployment-summary.png) | Synchronous baseline | Commit `c904ea2`, region `eu-west-1`, and `58` managed resources for the baseline deployment |
+| [`02-smoke-test-pass.png`](evidence/02-smoke-test-pass.png) | Synchronous baseline | CRUD, idempotency replay, idempotency conflict, optimistic locking, and delete behavior passed after correction |
+| [`03-structured-logs.png`](evidence/03-structured-logs.png) | Synchronous baseline | Structured application logs for idempotency and item creation behavior |
+| [`04-cloudwatch-alarms.png`](evidence/04-cloudwatch-alarms.png) | Synchronous baseline | Original CloudWatch alarms were present and reviewed |
+| [`05-destroy-complete.png`](evidence/05-destroy-complete.png) | Synchronous baseline | Baseline validation resources were destroyed and state became empty |
+| [`06-async-deployment-summary.png`](evidence/06-async-deployment-summary.png) | Async processing extension | Commit `30f14d4`, region `eu-west-1`, and final deployed Terraform state containing `87` managed resources |
+| [`07-async-processing-completed.png`](evidence/07-async-processing-completed.png) | Async processing extension | Created item reached `COMPLETED` with expected `processedEventId`, `processedAt`, and `creationMetadata` |
+| [`08-async-structured-logs.png`](evidence/08-async-structured-logs.png) | Async processing extension | Dispatcher and Worker emitted expected structured events |
+| [`09-duplicate-event-ignored.png`](evidence/09-duplicate-event-ignored.png) | Async processing extension | Duplicate event was ignored without changing `processedAt`, `processedEventId`, or `version` |
+| [`10-async-dlq-alarm.png`](evidence/10-async-dlq-alarm.png) | Async processing extension | Retryable failures reached the DLQ and the DLQ alarm reached `ALARM` |
+| [`11-async-redrive-recovery.png`](evidence/11-async-redrive-recovery.png) | Async processing extension | After restoration and redrive, the item recovered from `PENDING` to `COMPLETED` and queues emptied |
+| [`12-async-destroy-complete.png`](evidence/12-async-destroy-complete.png) | Async processing extension | Async validation resources were destroyed, state became empty, and core resources were confirmed removed |
 
-![Deployment summary](evidence/01-deployment-summary.png)
+## Current environment status
 
-The smoke-test evidence shows the runtime API checks passing after the IAM correction and redeployment.
+The validation environment was destroyed.
 
-![Smoke test pass](evidence/02-smoke-test-pass.png)
-
-The structured log evidence shows Lambda application events for idempotency reservation, item creation, replay, and conflict handling.
-
-![Structured logs](evidence/03-structured-logs.png)
-
-The CloudWatch evidence shows that the expected alarms were created and reviewed during validation.
-
-![CloudWatch alarms](evidence/04-cloudwatch-alarms.png)
-
-The destroy evidence records the successful removal of all `58` Terraform-managed resources. State cleanup and post-destroy reproducibility were verified separately after teardown.
-
-![Destroy complete](evidence/05-destroy-complete.png)
+The API and async queues are no longer publicly available.

@@ -119,6 +119,8 @@ Terraform creates one log group for each Lambda function:
 * `/aws/lambda/<project_name>-get`
 * `/aws/lambda/<project_name>-update`
 * `/aws/lambda/<project_name>-delete`
+* `/aws/lambda/<project_name>-item-created-dispatcher`
+* `/aws/lambda/<project_name>-item-processing-worker`
 
 API Gateway access logs are written to the log group exposed by:
 
@@ -389,6 +391,12 @@ The dispatcher event-source mapping uses `ReportBatchItemFailures`. DynamoDB Str
 
 The worker uses a stable `eventId` and conditional writes to keep item processing idempotent.
 
+## Worker Concurrency
+
+The Worker does not use reserved concurrency. The SQS event source mapping currently limits maximum concurrency to `2`.
+
+This limits consumption for this event source without reserving account-wide Lambda capacity. See [AWS deployment validation](deployment-validation.md) for the partial Apply and recovery record.
+
 ## Known Stream Limitation
 
 The DynamoDB Stream mapping currently has no finite retry count and no stream on-failure destination. A poison record that keeps failing can block its shard until the record expires. IteratorAge and dispatcher handled-failure alarms are the operational signals for this trade-off.
@@ -454,16 +462,29 @@ The idempotency table remains the business replay record for the configured rete
 
 ## Environment Configuration
 
-All four handlers require:
+Create requires:
+
+```text
+TABLE_NAME
+IDEMPOTENCY_TABLE_NAME
+```
+
+Get, update, and delete require:
 
 ```text
 TABLE_NAME
 ```
 
-The create handler also requires:
+Dispatcher requires:
 
 ```text
-IDEMPOTENCY_TABLE_NAME
+ITEM_PROCESSING_QUEUE_URL
+```
+
+Worker requires:
+
+```text
+TABLE_NAME
 ```
 
 Terraform configures these values.
@@ -513,3 +534,4 @@ After teardown:
 * [ADR 005: Conditional item creation](adr/005-use-conditional-writes-for-item-creation.md)
 * [ADR 006: Optimistic locking](adr/006-use-optimistic-locking-for-item-updates.md)
 * [ADR 007: Idempotency keys](adr/007-use-idempotency-keys-for-item-creation.md)
+* [ADR 008: DynamoDB Streams and SQS item processing](adr/008-use-dynamodb-streams-and-sqs-for-item-processing.md)

@@ -2,20 +2,22 @@
 
 [![CI](https://github.com/hongzz0618/aws-serverless-api-backend/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hongzz0618/aws-serverless-api-backend/actions/workflows/ci.yml)
 
-A TypeScript REST API on AWS using API Gateway, four Lambda functions, DynamoDB, Terraform, and GitHub Actions.
+A TypeScript serverless API on AWS using API Gateway, six Lambda functions, DynamoDB, DynamoDB Streams, SQS, a DLQ, CloudWatch, Terraform, and GitHub Actions.
 
-The project focuses on retry-safe writes, optimistic concurrency control, API contract validation, observability, scoped permissions, reproducible Lambda deployment artifacts, and plan-level infrastructure checks.
+The public API remains a CRUD interface for items. Item creation is durable before asynchronous post-create processing runs through the Stream, Dispatcher, queue, and Worker path.
 
 ## Highlights
 
-- Four TypeScript Lambda handlers for create, read, update, and delete
+- CRUD API for create, read, update, and delete
 - Idempotency keys for retry-safe item creation
 - Optimistic locking for concurrent updates
-- Zod validation and consistent JSON error responses
-- OpenAPI checks against Terraform routes and Lambda responses
-- Structured logs, metrics, alarms, and API Gateway access logs
-- Terraform-managed infrastructure and verified Lambda ZIP artifacts
-- Native Terraform plan tests for core infrastructure contracts
+- Event-driven post-create processing
+- Deterministic event IDs for item-created work
+- Idempotent Worker conditional updates
+- Partial batch failure reporting
+- SQS retry and DLQ redrive
+- Structured logs and CloudWatch alarms
+- Terraform-managed infrastructure and reproducible Lambda packages
 
 ## Architecture
 
@@ -34,14 +36,22 @@ flowchart TB
     Update --> Items
     Delete --> Items
 
+    Items -->|"DynamoDB Stream INSERT"| Dispatcher["item-created-dispatcher Lambda"]
+    Dispatcher -->|"item.created.v1:<itemId>"| Queue["SQS standard queue"]
+    Queue --> Worker["item-processing-worker Lambda"]
+    Worker -->|"conditional COMPLETED update"| Items
+    Queue -->|"repeated failures"| DLQ["SQS DLQ"]
+
     APIGW -. "access logs and metrics" .-> CloudWatch[CloudWatch]
     Create -. "logs and metrics" .-> CloudWatch
     Get -. "logs and metrics" .-> CloudWatch
     Update -. "logs and metrics" .-> CloudWatch
     Delete -. "logs and metrics" .-> CloudWatch
+    Dispatcher -. "logs, metrics, alarms" .-> CloudWatch
+    Worker -. "logs, metrics, alarms" .-> CloudWatch
+    Queue -. "age and depth alarms" .-> CloudWatch
+    DLQ -. "visible-message alarm" .-> CloudWatch
 ```
-
-The Create Lambda uses both DynamoDB tables to coordinate item creation and response replay. The other handlers access the items table only.
 
 Terraform provisions the AWS resources and permissions. GitHub Actions validates, tests, and packages the project but does not deploy it.
 
@@ -81,6 +91,14 @@ Each item contains an integer `version`.
 - A matching version updates the item and increments the version.
 - A stale version returns `409 Conflict`.
 - A missing item returns `404 Not Found`.
+
+### Async item processing
+
+Create returns after the durable item write. The stored item initially has `processingStatus = PENDING`.
+
+The async path later changes the item to `processingStatus = COMPLETED`. The Worker uses the deterministic event ID `item.created.v1:<itemId>` and a conditional update so duplicate delivery is expected and safely ignored.
+
+Worker processing updates internal processing fields such as `processedEventId`, `processedAt`, and `creationMetadata`. It does not increment the public API `version`.
 
 ### Validation and errors
 
@@ -134,7 +152,7 @@ terraform validate -no-color
 terraform test -no-color
 ```
 
-The native Terraform tests exercise planned DynamoDB, Lambda, API Gateway, invocation-permission, and IAM contracts without creating AWS resources.
+The native Terraform tests exercise planned DynamoDB, Lambda, API Gateway, invocation-permission, SQS, event-source mapping, CloudWatch, and IAM contracts without creating AWS resources.
 
 GitHub Actions runs the same application, artifact, and Terraform checks with read-only repository permissions and no AWS credentials.
 
@@ -191,48 +209,50 @@ For logs, alarms, troubleshooting, and teardown guidance, see the [`operations r
 
 Terraform configures:
 
-- Lambda log groups with configurable retention
+- Lambda log groups for the CRUD, Dispatcher, and Worker functions
 - API Gateway access logs, metrics, and throttling
-- Lambda error, handled-500, and throttle alarms
+- Dispatcher and Worker log groups
+- Queue age monitoring
+- DLQ visible-message monitoring
+- DynamoDB Stream `IteratorAge` monitoring
+- Application-level dispatch and processing failure metrics
+- Lambda `Errors` and `Throttles` alarms
 - API Gateway 4XX, 5XX, and latency alarms
-- Item-table DynamoDB system-error monitoring
 - Idempotency replay, conflict, and failure metric filters
 - Optional CloudWatch alarm actions
 
 Lambda handlers emit structured JSON logs without recording full request bodies, full idempotency keys, request fingerprints, or sensitive headers.
 
-API Gateway invocation permissions are scoped to the implemented routes. Lambda permissions are resource-scoped to the project DynamoDB tables and CloudWatch log groups.
+API Gateway invocation permissions are scoped to the implemented routes. Lambda permissions are resource-scoped to the project DynamoDB tables, queues, and CloudWatch log groups.
 
 GitHub Actions uses a read-only repository token and does not receive AWS credentials.
 
-The API does not implement authentication, authorization, CORS, WAF protection, or per-client quotas. It should not be exposed for broader use without an identity and abuse-protection strategy.
+The API does not implement authentication, authorization, CORS, WAF protection, tracing, or per-client quotas.
 
 ## AWS Deployment Validation
 
-A complete deployment, runtime-validation, and teardown cycle was executed in `eu-west-1` using real AWS resources. The cycle covered deployment of 58 Terraform-managed resources, runtime smoke testing, API Gateway access-log review, Lambda structured-log review, CloudWatch alarm verification, cleanup, and post-destroy reproducibility checks.
+Two real AWS validation cycles were completed in `eu-west-1`:
 
-The runtime checks covered item creation, idempotent replay, idempotency-key conflict handling, item retrieval, optimistic-locking update, stale-version conflict handling, deletion, and post-deletion `404` behavior. During validation, an IAM defect in the Lambda DynamoDB policy was found, corrected, covered by regression tests, redeployed, and revalidated.
+- Synchronous baseline: commit `c904ea2`, `58` Terraform-managed resources, evidence `01`-`05`
+- Async extension: commit `30f14d4`, final `87` Terraform-managed resources, evidence `06`-`12`
 
-The environment was destroyed after validation. The API is no longer deployed or publicly available.
+Both validation environments were destroyed after verification.
 
-Full evidence and validation notes are in [`docs/deployment-validation.md`](docs/deployment-validation.md).
+Full evidence, validation notes, and the partial Apply recovery record are in [`docs/deployment-validation.md`](docs/deployment-validation.md).
 
-![Smoke test pass](docs/evidence/02-smoke-test-pass.png)
+![Async processing completed](docs/evidence/07-async-processing-completed.png)
+
+![Async redrive recovery](docs/evidence/11-async-redrive-recovery.png)
 
 ## Limitations and Trade-offs
 
-- Terraform uses local state unless another backend is configured
-- There is no separate `dev`, `staging`, and `prod` environment structure
-- CI validates, tests, and packages the project but does not deploy it
-- Alarm notifications require configured `alarm_actions`
-- There is no CloudWatch dashboard or distributed tracing
-- DynamoDB access is focused on lookup by item ID
-- Dedicated alarms do not cover every idempotency-table and transaction-specific operation
-- Idempotency behavior and related metrics should be revalidated after significant changes
-
-The serverless design reduces infrastructure management and fits small or irregular workloads. The trade-off is greater dependence on managed-service behavior, Lambda limits, API Gateway configuration, and access-pattern-driven DynamoDB modeling.
-
-DynamoDB uses on-demand billing, and the Terraform-managed Lambda and API access log groups default to seven-day retention. API Gateway execution-log retention and lifecycle are managed separately. Requests, logs, metrics, and alarms can still generate cost.
+- Async processing is eventually consistent after `POST /items`.
+- SQS Standard Queue provides at-least-once delivery, so Worker idempotency is required.
+- The DynamoDB Stream mapping has no finite retry count and no stream on-failure destination.
+- Terraform uses local state unless another backend is configured.
+- The repository does not include authentication, CORS, WAF, tracing, or a multi-environment layout.
+- CI validates, tests, and packages the project but does not deploy it.
+- Alarm notifications require configured `alarm_actions`.
 
 ## Architecture Decisions
 
@@ -246,6 +266,7 @@ DynamoDB uses on-demand billing, and the Terraform-managed Lambda and API access
 - [005. Use conditional writes for item creation](docs/adr/005-use-conditional-writes-for-item-creation.md)
 - [006. Use optimistic locking for item updates](docs/adr/006-use-optimistic-locking-for-item-updates.md)
 - [007. Use idempotency keys for item creation](docs/adr/007-use-idempotency-keys-for-item-creation.md)
+- [008. Use DynamoDB Streams and SQS for item processing](docs/adr/008-use-dynamodb-streams-and-sqs-for-item-processing.md)
 
 </details>
 

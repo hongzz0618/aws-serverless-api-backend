@@ -16,13 +16,13 @@ locals {
       name           = "${aws_lambda_function.item_processing_worker.function_name}-retryable-failure"
       log_group_name = aws_cloudwatch_log_group.item_processing_worker.name
       metric_name    = "ItemProcessingRetryableFailureCount"
-      pattern        = "{ $.event = \"item_processing_failed\" && $.retryable = true }"
+      pattern        = "{ $.event = \"item_processing_failed\" && $.retryable IS TRUE }"
     }
     worker_permanent_failure = {
       name           = "${aws_lambda_function.item_processing_worker.function_name}-permanent-failure"
       log_group_name = aws_cloudwatch_log_group.item_processing_worker.name
       metric_name    = "ItemProcessingPermanentFailureCount"
-      pattern        = "{ $.event = \"item_processing_failed\" && $.retryable = false }"
+      pattern        = "{ $.event = \"item_processing_failed\" && $.retryable IS FALSE }"
     }
     worker_duplicate = {
       name           = "${aws_lambda_function.item_processing_worker.function_name}-duplicate"

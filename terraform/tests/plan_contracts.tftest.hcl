@@ -628,8 +628,8 @@ run "async_alarm_contract" {
 
   assert {
     condition = (
-      aws_cloudwatch_log_metric_filter.async_application_events["worker_retryable_failure"].pattern == "{ $.event = \"item_processing_failed\" && $.retryable = true }" &&
-      aws_cloudwatch_log_metric_filter.async_application_events["worker_permanent_failure"].pattern == "{ $.event = \"item_processing_failed\" && $.retryable = false }" &&
+      aws_cloudwatch_log_metric_filter.async_application_events["worker_retryable_failure"].pattern == "{ $.event = \"item_processing_failed\" && $.retryable IS TRUE }" &&
+      aws_cloudwatch_log_metric_filter.async_application_events["worker_permanent_failure"].pattern == "{ $.event = \"item_processing_failed\" && $.retryable IS FALSE }" &&
       aws_cloudwatch_log_metric_filter.async_application_events["worker_retryable_failure"].metric_transformation[0].name == "ItemProcessingRetryableFailureCount" &&
       aws_cloudwatch_log_metric_filter.async_application_events["worker_permanent_failure"].metric_transformation[0].name == "ItemProcessingPermanentFailureCount"
     )

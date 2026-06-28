@@ -35,7 +35,16 @@ export const itemCreatedEventV1Schema = z
       })
       .strict(),
   })
-  .strict();
+  .strict()
+  .superRefine((event, ctx) => {
+    if (event.eventId !== createItemCreatedEventId(event.data.itemId)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["eventId"],
+        message: "Event id must match data.itemId",
+      });
+    }
+  });
 
 export type ItemCreatedEventV1 = z.infer<typeof itemCreatedEventV1Schema>;
 

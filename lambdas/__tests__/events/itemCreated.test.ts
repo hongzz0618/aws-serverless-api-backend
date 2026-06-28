@@ -122,6 +122,31 @@ describe("ItemCreatedEventV1 event id validation", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts an event id whose UUID matches data.itemId", () => {
+    const matchingItemId = "660e8400-e29b-41d4-a716-446655440000";
+    const result = parseItemCreatedEventV1({
+      ...validEvent(),
+      eventId: createItemCreatedEventId(matchingItemId),
+      data: {
+        ...validEvent().data,
+        itemId: matchingItemId,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects an event id whose UUID differs from data.itemId", () => {
+    expectInvalid({
+      ...validEvent(),
+      eventId: createItemCreatedEventId("660e8400-e29b-41d4-a716-446655440000"),
+      data: {
+        ...validEvent().data,
+        itemId: "770e8400-e29b-41d4-a716-446655440000",
+      },
+    });
+  });
+
   it("rejects an event id with the wrong prefix", () => {
     expectInvalid({
       ...validEvent(),

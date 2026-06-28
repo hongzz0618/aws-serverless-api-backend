@@ -211,7 +211,6 @@ Terraform configures:
 
 - Lambda log groups for the CRUD, Dispatcher, and Worker functions
 - API Gateway access logs, metrics, and throttling
-- Dispatcher and Worker log groups
 - Queue age monitoring
 - DLQ visible-message monitoring
 - DynamoDB Stream `IteratorAge` monitoring
@@ -223,7 +222,7 @@ Terraform configures:
 
 Lambda handlers emit structured JSON logs without recording full request bodies, full idempotency keys, request fingerprints, or sensitive headers.
 
-API Gateway invocation permissions are scoped to the implemented routes. Lambda permissions are resource-scoped to the project DynamoDB tables, queues, and CloudWatch log groups.
+API Gateway invoke permissions are route-scoped. Lambda permissions are scoped to project resources where AWS supports resource-level permissions; DynamoDB `ListStreams` uses wildcard scope as required by the service.
 
 GitHub Actions uses a read-only repository token and does not receive AWS credentials.
 
@@ -250,7 +249,9 @@ Full evidence, validation notes, and the partial Apply recovery record are in [`
 - SQS Standard Queue provides at-least-once delivery, so Worker idempotency is required.
 - The DynamoDB Stream mapping has no finite retry count and no stream on-failure destination.
 - Terraform uses local state unless another backend is configured.
+- Terraform manages the regional API Gateway CloudWatch role; review this account-level setting before using the configuration in a shared AWS account or region.
 - The repository does not include authentication, CORS, WAF, tracing, or a multi-environment layout.
+- The four CRUD Lambda functions currently share one resource-scoped execution role rather than using a separate role per function.
 - CI validates, tests, and packages the project but does not deploy it.
 - Alarm notifications require configured `alarm_actions`.
 

@@ -141,6 +141,108 @@ override_resource {
   }
 }
 
+run "project_name_accepts_current_name" {
+  command = plan
+
+  variables {
+    project_name = "hong-serverless-api"
+  }
+}
+
+run "project_name_accepts_single_letter" {
+  command = plan
+
+  variables {
+    project_name = "a"
+  }
+}
+
+run "project_name_accepts_letter_digit" {
+  command = plan
+
+  variables {
+    project_name = "a1"
+  }
+}
+
+run "project_name_accepts_hyphenated_digits" {
+  command = plan
+
+  variables {
+    project_name = "serverless-api-123"
+  }
+}
+
+run "project_name_rejects_uppercase" {
+  command = plan
+
+  variables {
+    project_name = "Serverless-api"
+  }
+
+  expect_failures = [var.project_name]
+}
+
+run "project_name_rejects_space" {
+  command = plan
+
+  variables {
+    project_name = "serverless api"
+  }
+
+  expect_failures = [var.project_name]
+}
+
+run "project_name_rejects_leading_hyphen" {
+  command = plan
+
+  variables {
+    project_name = "-serverless-api"
+  }
+
+  expect_failures = [var.project_name]
+}
+
+run "project_name_rejects_trailing_hyphen" {
+  command = plan
+
+  variables {
+    project_name = "serverless-api-"
+  }
+
+  expect_failures = [var.project_name]
+}
+
+run "project_name_rejects_consecutive_hyphens" {
+  command = plan
+
+  variables {
+    project_name = "serverless--api"
+  }
+
+  expect_failures = [var.project_name]
+}
+
+run "project_name_rejects_underscore" {
+  command = plan
+
+  variables {
+    project_name = "serverless_api"
+  }
+
+  expect_failures = [var.project_name]
+}
+
+run "project_name_rejects_more_than_35_characters" {
+  command = plan
+
+  variables {
+    project_name = "serverless-api-name-that-is-too-long"
+  }
+
+  expect_failures = [var.project_name]
+}
+
 run "dynamodb_contract" {
   command = plan
 

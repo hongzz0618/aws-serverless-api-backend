@@ -256,6 +256,11 @@ resource "aws_iam_role_policy" "api_gateway_cloudwatch_logs" {
   })
 }
 
+# Configures the API Gateway CloudWatch role for this AWS account and region.
+# This regional account-level setting can affect other REST APIs in the same
+# account and region. reset_on_delete is retained for the validated disposable
+# environment cleanup behavior; shared environments should review ownership of
+# this setting before applying or destroying.
 resource "aws_api_gateway_account" "account" {
   cloudwatch_role_arn = aws_iam_role.api_gateway_cloudwatch.arn
   reset_on_delete     = true

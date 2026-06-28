@@ -13,6 +13,12 @@ terraform output -raw api_url
 
 The Terraform configuration creates a `dev` API Gateway stage. The output should end with `/dev`.
 
+## API Gateway Account Setting Warning
+
+Terraform manages `aws_api_gateway_account`, which controls a regional account-level API Gateway CloudWatch role. Applying this configuration may replace the API Gateway CloudWatch role configured for the AWS account and region.
+
+Destroying with `reset_on_delete = true` clears that configured role. This repository was validated in a disposable controlled environment. In a shared account or region, inspect the existing API Gateway account configuration before Apply or Destroy.
+
 ## Recommended Smoke Test
 
 The repository includes a post-deployment smoke test at:
@@ -489,7 +495,11 @@ TABLE_NAME
 
 Terraform configures these values.
 
-If a value is missing or changed manually, the affected route returns a safe `500` response. Verify the Lambda environment configuration in Terraform and in the deployed function.
+For CRUD handlers, missing configuration produces a safe HTTP `500` response.
+
+For the Dispatcher or Worker, missing configuration is logged and the affected records are returned as batch failures for retry. Dispatcher configuration failures affect DynamoDB Stream batch processing. Worker configuration failures affect SQS batch processing. Neither async component returns an HTTP response.
+
+Verify the Lambda environment configuration in Terraform and in the deployed function.
 
 The application logs expose `errorName`, but intentionally do not expose the raw exception message.
 

@@ -49,6 +49,8 @@ describe("GitHub Actions pre-deployment security", () => {
     expect(workflow).toContain("lambdas/getItem.zip");
     expect(workflow).toContain("lambdas/updateItem.zip");
     expect(workflow).toContain("lambdas/deleteItem.zip");
+    expect(workflow).toContain("lambdas/dispatchItemCreated.zip");
+    expect(workflow).toContain("lambdas/processItemCreated.zip");
     expect(workflow).toContain("lambdas/artifacts-manifest.json");
     expect(workflow).toContain("retention-days: 7");
     expect(workflow).not.toMatch(/path:\s*\|\s*\r?\n\s+lambdas\/?\s*$/m);

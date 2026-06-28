@@ -13,8 +13,8 @@ variable "project_name" {
   type        = string
 
   validation {
-    condition     = length(trimspace(var.project_name)) > 0 && length(var.project_name) <= 40
-    error_message = "project_name must be non-empty and 40 characters or fewer."
+    condition     = length(trimspace(var.project_name)) >= 1 && length(trimspace(var.project_name)) <= 35 && can(regex("^[a-z0-9]+(?:-[a-z0-9]+)*$", var.project_name))
+    error_message = "project_name must be 1-35 characters and contain only lowercase letters, digits, and single hyphens, without leading or trailing hyphens."
   }
 }
 
@@ -55,7 +55,7 @@ variable "log_retention_days" {
 }
 
 variable "enable_alarms" {
-  description = "Whether to create basic CloudWatch alarms for API Gateway, Lambda, and DynamoDB."
+  description = "Whether to create the API, Lambda, DynamoDB, Stream, queue, DLQ, and application-level CloudWatch alarms."
   type        = bool
   default     = true
 }

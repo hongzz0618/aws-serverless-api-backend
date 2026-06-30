@@ -1,4 +1,4 @@
-# AWS Serverless API Backend
+# Reliable Serverless Backend
 
 [![CI](https://github.com/hongzz0618/aws-serverless-api-backend/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hongzz0618/aws-serverless-api-backend/actions/workflows/ci.yml)
 

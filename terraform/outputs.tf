@@ -62,3 +62,8 @@ output "cloudwatch_alarm_names" {
     values(aws_cloudwatch_metric_alarm.async_lambda_throttles)[*].alarm_name
   ) : []
 }
+
+output "async_item_processing_dashboard_name" {
+  description = "CloudWatch dashboard for async item-processing health."
+  value       = aws_cloudwatch_dashboard.async_item_processing.dashboard_name
+}

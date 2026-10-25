@@ -865,3 +865,166 @@ run "async_output_contract" {
     error_message = "Async Lambda and log group outputs must reference the Terraform-managed resources."
   }
 }
+
+run "async_dashboard_contract" {
+  command = plan
+
+  assert {
+    condition = (
+      aws_cloudwatch_dashboard.async_item_processing.dashboard_name == "${var.project_name}-${var.region}-async-item-processing" &&
+      output.async_item_processing_dashboard_name == aws_cloudwatch_dashboard.async_item_processing.dashboard_name &&
+      jsondecode(aws_cloudwatch_dashboard.async_item_processing.dashboard_body).start == "-PT6H" &&
+      jsondecode(aws_cloudwatch_dashboard.async_item_processing.dashboard_body).periodOverride == "inherit" &&
+      length(jsondecode(aws_cloudwatch_dashboard.async_item_processing.dashboard_body).widgets) == 6
+    )
+    error_message = "The async dashboard must expose its project/region name and contain six widgets with a six-hour view."
+  }
+
+  assert {
+    condition = alltrue([
+      for index, widget in jsondecode(aws_cloudwatch_dashboard.async_item_processing.dashboard_body).widgets :
+      widget.type == "metric" &&
+      widget.properties.region == var.region &&
+      widget.properties.period == 300 &&
+      widget.properties.stat == (index < 3 ? "Maximum" : "Sum") &&
+      widget.properties.view == "timeSeries" &&
+      widget.properties.stacked == false && !can(widget.properties.unit) &&
+      widget.x == (index % 2) * 12 && widget.y == floor(index / 2) * 6 &&
+      widget.width == 12 && widget.height == 6
+    ])
+    error_message = "Dashboard widgets must use the configured region, five-minute statistics, and a two-column layout."
+  }
+
+  assert {
+    condition = jsonencode([
+      for widget in slice(jsondecode(aws_cloudwatch_dashboard.async_item_processing.dashboard_body).widgets, 0, 3) : widget.properties.metrics
+      ]) == jsonencode([
+      [["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", aws_sqs_queue.item_processing.name]],
+      [["AWS/SQS", "ApproximateAgeOfOldestMessage", "QueueName", aws_sqs_queue.item_processing.name]],
+      [["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", aws_sqs_queue.item_processing_dlq.name]]
+    ])
+    error_message = "Queue widgets must use AWS/SQS metrics and the correct managed QueueName dimensions."
+  }
+
+  assert {
+    condition = jsonencode([
+      for metric in jsondecode(aws_cloudwatch_dashboard.async_item_processing.dashboard_body).widgets[3].properties.metrics : slice(metric, 0, 2)
+      ]) == jsonencode([
+      ["${var.project_name}/ItemsApi", "ItemProcessingSuccessCount"],
+      ["${var.project_name}/ItemsApi", "ItemProcessingRetryableFailureCount"],
+      ["${var.project_name}/ItemsApi", "ItemProcessingPermanentFailureCount"]
+    ])
+    error_message = "Worker outcomes must use the existing success, retryable-failure, and permanent-failure metrics."
+  }
+
+  assert {
+    condition = (
+      jsonencode(slice(jsondecode(aws_cloudwatch_dashboard.async_item_processing.dashboard_body).widgets[4].properties.metrics[0], 0, 2)) ==
+      jsonencode(["${var.project_name}/ItemsApi", "ItemCreatedDispatchFailureCount"]) &&
+      alltrue([
+        for metric in concat(
+          jsondecode(aws_cloudwatch_dashboard.async_item_processing.dashboard_body).widgets[3].properties.metrics,
+          [jsondecode(aws_cloudwatch_dashboard.async_item_processing.dashboard_body).widgets[4].properties.metrics[0]]
+        ) : length(metric) == 3 && try(keys(metric[2]) == ["label"], false)
+      ])
+    )
+    error_message = "Application metrics must use the existing namespace without dimensions or a restrictive unit filter."
+  }
+
+  assert {
+    condition = (
+      jsonencode(slice(jsondecode(aws_cloudwatch_dashboard.async_item_processing.dashboard_body).widgets[4].properties.metrics[1], 0, 4)) ==
+      jsonencode(["AWS/Lambda", "Errors", "FunctionName", aws_lambda_function.item_created_dispatcher.function_name]) &&
+      length(jsondecode(aws_cloudwatch_dashboard.async_item_processing.dashboard_body).widgets[4].properties.metrics) == 2 &&
+      length(jsondecode(aws_cloudwatch_dashboard.async_item_processing.dashboard_body).widgets[4].properties.metrics[1]) == 5 &&
+      try(keys(jsondecode(aws_cloudwatch_dashboard.async_item_processing.dashboard_body).widgets[4].properties.metrics[1][4]) == ["label"], false) &&
+      jsonencode(jsondecode(aws_cloudwatch_dashboard.async_item_processing.dashboard_body).widgets[5].properties.metrics) == jsonencode([
+        ["AWS/Lambda", "Errors", "FunctionName", aws_lambda_function.item_processing_worker.function_name],
+        ["AWS/Lambda", "Throttles", "FunctionName", aws_lambda_function.item_processing_worker.function_name]
+      ])
+    )
+    error_message = "Lambda metrics must use AWS/Lambda and the correct dispatcher/worker FunctionName dimensions."
+  }
+}
+
+run "async_dashboard_without_alarms_in_another_region" {
+  command = plan
+
+  variables {
+    enable_alarms = false
+    project_name  = "dashboard-check"
+    region        = "eu-west-1"
+  }
+
+  override_resource {
+    target          = aws_sqs_queue.item_processing
+    override_during = plan
+    values = {
+      arn  = "arn:aws:sqs:eu-west-1:123456789012:dashboard-check-item-processing"
+      id   = "https://sqs.eu-west-1.amazonaws.com/123456789012/dashboard-check-item-processing"
+      name = "dashboard-check-item-processing"
+      url  = "https://sqs.eu-west-1.amazonaws.com/123456789012/dashboard-check-item-processing"
+    }
+  }
+
+  override_resource {
+    target          = aws_sqs_queue.item_processing_dlq
+    override_during = plan
+    values = {
+      arn  = "arn:aws:sqs:eu-west-1:123456789012:dashboard-check-item-processing-dlq"
+      id   = "https://sqs.eu-west-1.amazonaws.com/123456789012/dashboard-check-item-processing-dlq"
+      name = "dashboard-check-item-processing-dlq"
+    }
+  }
+
+  override_resource {
+    target          = aws_lambda_function.item_created_dispatcher
+    override_during = plan
+    values = {
+      arn           = "arn:aws:lambda:eu-west-1:123456789012:function:dashboard-check-item-created-dispatcher"
+      function_name = "dashboard-check-item-created-dispatcher"
+    }
+  }
+
+  override_resource {
+    target          = aws_lambda_function.item_processing_worker
+    override_during = plan
+    values = {
+      arn           = "arn:aws:lambda:eu-west-1:123456789012:function:dashboard-check-item-processing-worker"
+      function_name = "dashboard-check-item-processing-worker"
+    }
+  }
+
+  assert {
+    condition = (
+      length(output.cloudwatch_alarm_names) == 0 &&
+      aws_cloudwatch_dashboard.async_item_processing.dashboard_name == "dashboard-check-eu-west-1-async-item-processing" &&
+      output.async_item_processing_dashboard_name == aws_cloudwatch_dashboard.async_item_processing.dashboard_name &&
+      length(jsondecode(aws_cloudwatch_dashboard.async_item_processing.dashboard_body).widgets) == 6 &&
+      alltrue([
+        for widget in jsondecode(aws_cloudwatch_dashboard.async_item_processing.dashboard_body).widgets :
+        widget.properties.region == "eu-west-1" && !can(widget.properties.annotations.alarms)
+      ])
+    )
+    error_message = "Disabling alarms must preserve all six widgets and use the alternative project and region."
+  }
+
+  assert {
+    condition = alltrue([
+      for index, widget in jsondecode(aws_cloudwatch_dashboard.async_item_processing.dashboard_body).widgets :
+      alltrue([
+        for metric in widget.properties.metrics :
+        metric[0] == "AWS/SQS" ? (
+          metric[2] == "QueueName" &&
+          metric[3] == (index == 2 ? aws_sqs_queue.item_processing_dlq.name : aws_sqs_queue.item_processing.name)
+          ) : metric[0] == "AWS/Lambda" ? (
+          metric[2] == "FunctionName" &&
+          metric[3] == (index == 4 ? aws_lambda_function.item_created_dispatcher.function_name : aws_lambda_function.item_processing_worker.function_name)
+          ) : (
+          metric[0] == "dashboard-check/ItemsApi" && length(metric) == 3 && try(keys(metric[2]) == ["label"], false)
+        )
+      ])
+    ])
+    error_message = "With alarms disabled, metrics must still reference the configured namespace and managed queue/function dimensions."
+  }
+}

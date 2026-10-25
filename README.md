@@ -215,6 +215,7 @@ Terraform configures:
 - DLQ visible-message monitoring
 - DynamoDB Stream `IteratorAge` monitoring
 - Application-level dispatch and processing failure metrics
+- A six-widget [async processing dashboard](docs/operations.md#async-processing-dashboard), available even when alarms are disabled
 - Lambda `Errors` and `Throttles` alarms
 - API Gateway 4XX, 5XX, and latency alarms
 - Idempotency replay, conflict, and failure metric filters

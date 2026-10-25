@@ -409,6 +409,38 @@ The DynamoDB Stream mapping currently has no finite retry count and no stream on
 
 This first async version accepts that limitation to keep the service count small. Do not add a second failure queue unless the architecture is intentionally changed in a later phase.
 
+## Async Processing Dashboard
+
+Terraform defines the dashboard in `terraform/async_dashboard.tf`. A normal Terraform deployment creates it without manual Console configuration. Its name is `${project_name}-${region}-async-item-processing`; the region is included because CloudWatch dashboards are global within an AWS account.
+
+For an existing deployment, retrieve its name:
+
+```bash
+cd terraform
+terraform output -raw async_item_processing_dashboard_name
+```
+
+Open that name under **CloudWatch > Dashboards** in the same AWS account. Manage changes through Terraform. The dashboard remains available when `enable_alarms = false` and does not require `alarm_actions`.
+
+The six widgets use five-minute periods and initially show the last six hours:
+
+| Widget | Namespace and metrics | Dimensions | Statistic |
+| --- | --- | --- | --- |
+| Queue backlog (visible messages) | `AWS/SQS`: `ApproximateNumberOfMessagesVisible` | Main queue `QueueName` | Maximum |
+| Oldest queued message age (seconds) | `AWS/SQS`: `ApproximateAgeOfOldestMessage` | Main queue `QueueName` | Maximum |
+| DLQ visible messages | `AWS/SQS`: `ApproximateNumberOfMessagesVisible` | DLQ `QueueName` | Maximum |
+| Worker processing outcomes | `${project_name}/ItemsApi`: `ItemProcessingSuccessCount`, `ItemProcessingRetryableFailureCount`, `ItemProcessingPermanentFailureCount` | None | Sum |
+| Dispatcher failures | `${project_name}/ItemsApi`: `ItemCreatedDispatchFailureCount`; `AWS/Lambda`: `Errors` | None for the application metric; dispatcher `FunctionName` for Lambda | Sum |
+| Worker Lambda errors and throttles | `AWS/Lambda`: `Errors`, `Throttles` | Worker `FunctionName` | Sum |
+
+Queue backlog means messages visible for retrieval, excluding in-flight and delayed messages. `Maximum` shows the highest reported queue value in each period; it is not a count of arrivals. SQS values are approximate, and oldest-message age can exclude repeatedly failing messages. See [AWS SQS metric definitions](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-available-cloudwatch-metrics.html).
+
+Processing counts come from existing structured-log metric filters. Successes count `item_processing_completed` events; duplicates and skipped items are not included. Failures count logged occurrences, which can repeat during retries. Configuration failures can emit one event for an entire batch, so these metrics are not exact counts of unique items or a success-rate denominator. Dispatcher handled failures and Lambda invocation errors are separate series and should not be added together.
+
+The metric filters have no default zero value. Gaps can mean no matching events or no ingested logs; missing data does not prove the workflow is healthy. Filters only publish events received after their creation. See [AWS log metric behavior](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/MonitoringLogData.html). This dashboard does not fill gaps with zeroes.
+
+The dashboard reuses existing metrics and adds no alerts. It does not measure end-to-end processing latency or show DynamoDB Stream backlog. Continue using the existing dispatcher `IteratorAge` alarm and logs for stream delays, and investigate logs and stored item state when metrics indicate failures.
+
 ## Async Alarm Interpretation
 
 CloudWatch Lambda `Errors` measure failed invocations. Handled record failures emitted through `batchItemFailures` can occur while the Lambda invocation itself completes successfully, so they do not always increase Lambda `Errors`.
@@ -529,7 +561,7 @@ After teardown:
 * There is no WAF integration.
 * There is no per-client quota or usage-plan enforcement.
 * There is no distributed tracing.
-* There is no CloudWatch dashboard or dedicated log analytics layer.
+* The CloudWatch dashboard covers async processing only; there is no dedicated log analytics layer.
 * Alarm notifications require optional `alarm_actions`.
 * Terraform uses local state unless a backend is configured outside this repository.
 * GitHub Actions validates and packages the project but does not deploy it.

@@ -1,4 +1,4 @@
-import type { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { GetItemCommand, type DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { describe, expect, it, vi } from "vitest";
 import {
   completeIdempotentCreate,
@@ -202,6 +202,37 @@ describe("idempotency persistence", () => {
 
     expect(result).toEqual({ status: "in_progress" });
     expect(send).toHaveBeenCalledTimes(3);
+  });
+
+  it("replays an expired COMPLETED record that is still stored without reclaiming it", async () => {
+    const originalResponse = { message: "Item created", id: OLD_ITEM_ID, version: 1 };
+    const send = vi.fn().mockRejectedValueOnce(conditionalError()).mockResolvedValueOnce({
+      Item: {
+        requestFingerprint: { S: TEST_FINGERPRINT },
+        status: { S: "COMPLETED" },
+        itemId: { S: OLD_ITEM_ID },
+        responseStatusCode: { N: "201" },
+        responseBody: { S: JSON.stringify(originalResponse) },
+        expiresAt: { N: String(NOW_EPOCH_SECONDS - 1) },
+      },
+    });
+
+    const result = await reserveIdempotencyRecord({
+      client: mockClient(send),
+      tableName: "idempotency-table",
+      key: TEST_KEY,
+      requestFingerprint: TEST_FINGERPRINT,
+      keyCorrelation: "key-hash",
+      itemId: TEST_ITEM_ID,
+      now: NOW,
+    });
+
+    expect(result).toEqual({ status: "replayed", response: originalResponse });
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(commandInput(send, 0)).toMatchObject({
+      ConditionExpression: "attribute_not_exists(#key)",
+    });
+    expect(send).toHaveBeenNthCalledWith(2, expect.any(GetItemCommand));
   });
 
   it("rejects malformed completed replay records", async () => {

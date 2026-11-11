@@ -417,7 +417,8 @@ describe("createItem handler", () => {
     );
   });
 
-  it("returns the original success response for an exact completed replay", async () => {
+  it("replays the original create response without looking up the current item", async () => {
+    const originalItemId = "00000000-0000-4000-8000-000000000099";
     const conditionalError = new Error("reservation exists");
     conditionalError.name = "ConditionalCheckFailedException";
     dynamoMock.send
@@ -428,12 +429,12 @@ describe("createItem handler", () => {
             S: "fc5d1045c1183e0903b3823b77393778261920349610a2754d05cb5f43cc2124",
           },
           status: { S: "COMPLETED" },
-          itemId: { S: TEST_ITEM_ID },
+          itemId: { S: originalItemId },
           responseStatusCode: { N: "201" },
           responseBody: {
             S: JSON.stringify({
               message: "Item created",
-              id: TEST_ITEM_ID,
+              id: originalItemId,
               version: 1,
             }),
           },
@@ -450,7 +451,7 @@ describe("createItem handler", () => {
     });
     expect(responseBody(result.body)).toEqual({
       message: "Item created",
-      id: TEST_ITEM_ID,
+      id: originalItemId,
       version: 1,
     });
     expect(loggedJson()).toEqual(
@@ -468,7 +469,10 @@ describe("createItem handler", () => {
         }),
       ])
     );
-    expect(dynamoMock.send).toHaveBeenCalledTimes(2);
+    expect(dynamoMock.send.mock.calls.map(([command]) => command.input.TableName)).toEqual([
+      "idempotency-table",
+      "idempotency-table",
+    ]);
   });
 
   it("returns 409 when the same Idempotency-Key is reused with a different payload", async () => {

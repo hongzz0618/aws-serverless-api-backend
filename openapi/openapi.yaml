@@ -20,11 +20,21 @@ paths:
       operationId: createItem
       summary: Create an item
       description: >
-        Creates an item with a generated UUID and version 1. The caller must
-        provide an Idempotency-Key header. Replaying the same key with the same
-        normalized payload returns the original 201 response. Reusing the key
-        with another payload, or while the original request is still in
-        progress, returns 409 Conflict.
+        Creates an item with a generated UUID and version 1. Use the required
+        Idempotency-Key header to retry a create request safely.
+
+        An IN_PROGRESS reservation has a 10-minute lease. While the lease is
+        active, a retry with the same key returns 409 Conflict. After the lease
+        expires, a retry with the same key and normalized payload can recover the
+        reservation if it still exists. Reusing a stored key with a different
+        payload returns 409 Conflict.
+
+        A COMPLETED record has a TTL of 24 hours from completion. DynamoDB
+        deletes expired records asynchronously. While the completed record
+        exists, even past its TTL, a retry with the same key and normalized
+        payload returns the original 201 response. This replay still works
+        after the item is updated or deleted. Once DynamoDB deletes the
+        record, the same key may create another item.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:

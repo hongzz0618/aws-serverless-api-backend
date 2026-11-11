@@ -78,12 +78,11 @@ The complete contract is defined in [`openapi/openapi.yaml`](openapi/openapi.yam
 `POST /items` requires a client-generated `Idempotency-Key`.
 
 - A new key creates an item and returns `201 Created`.
-- Replaying the same key and normalized payload returns the original response.
-- Reusing the key with another payload returns `409 Conflict`.
-- An active reservation also returns `409 Conflict`.
-- Expired in-progress reservations can be recovered by the same key and payload.
+- An active `IN_PROGRESS` reservation returns `409 Conflict`. After its 10-minute lease expires, a retry with the same key and normalized payload can recover the reservation if it still exists.
+- While a record exists for the key, a different payload returns `409 Conflict`.
+- A `COMPLETED` record has a TTL of 24 hours from completion. DynamoDB deletes expired records asynchronously. While the record exists, a matching retry returns the original `201 Created` response, even if the item was updated or deleted. After deletion of the record, the same key may create another item.
 
-The create flow combines an idempotency reservation with a DynamoDB transaction that conditionally creates the item and marks the reservation as completed.
+The create flow combines an idempotency reservation with a DynamoDB transaction that conditionally creates the item and marks the reservation as completed. See [ADR 007](docs/adr/007-use-idempotency-keys-for-item-creation.md).
 
 ### Optimistic locking
 

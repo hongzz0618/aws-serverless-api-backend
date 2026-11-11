@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type {
   AttributeValue,
   Context,
@@ -159,6 +160,52 @@ describe("dispatchItemCreated determinism", () => {
 });
 
 describe("dispatchItemCreated batch behavior", () => {
+  it("can send a later success again when Lambda retries from the failed sequence", async () => {
+    const failedItemId = "660e8400-e29b-41d4-a716-446655440000";
+    const laterItemId = "770e8400-e29b-41d4-a716-446655440000";
+    const failedItemIds = new Set([failedItemId]);
+    const { sender, sentEvents } = createCapturingSender({
+      failSequenceNumbers: failedItemIds,
+    });
+    const handler = createHandler(sender);
+    const records = [
+      streamRecord({ sequenceNumber: "100000000000000000001" }),
+      streamRecord({
+        sequenceNumber: "100000000000000000002",
+        image: newImage({ id: { S: failedItemId } }),
+      }),
+      streamRecord({
+        sequenceNumber: "100000000000000000003",
+        image: newImage({ id: { S: laterItemId } }),
+      }),
+    ];
+
+    const first = await handler(streamEvent(records));
+    expect(first.batchItemFailures).toEqual([
+      { itemIdentifier: "100000000000000000002" },
+    ]);
+    expect(sentEvents).toMatchObject([
+      { eventId: `item.created.v1:${itemId}` },
+      { eventId: `item.created.v1:${laterItemId}` },
+    ]);
+
+    failedItemIds.clear();
+    // Model Lambda's checkpoint suffix without treating this as an AWS test.
+    const checkpoint = records.findIndex(
+      (record) =>
+        record.dynamodb?.SequenceNumber === first.batchItemFailures[0].itemIdentifier
+    );
+    const replay = await handler(streamEvent(records.slice(checkpoint)));
+    expect(replay.batchItemFailures).toEqual([]);
+    expect(sentEvents).toMatchObject([
+      { eventId: `item.created.v1:${itemId}` },
+      { eventId: `item.created.v1:${laterItemId}` },
+      { eventId: `item.created.v1:${failedItemId}` },
+      { eventId: `item.created.v1:${laterItemId}` },
+    ]);
+    expect(sentEvents[3]).toEqual(sentEvents[1]);
+  });
+
   it("sends every valid INSERT record and returns no failures", async () => {
     const { sender, sentEvents } = createCapturingSender();
     const handler = createHandler(sender);
@@ -209,6 +256,36 @@ describe("dispatchItemCreated batch behavior", () => {
         }),
       ])
     );
+  });
+});
+
+describe("dispatchItemCreated S3 archive replay", () => {
+  it("accepts the decoded Stream payload and reports any remaining send failures", async () => {
+    const fixtureUrl = new URL("./fixtures/stream-s3-failure-envelope.json", import.meta.url);
+    const envelope: { payload: string } = JSON.parse(readFileSync(fixtureUrl, "utf8"));
+    const original: DynamoDBStreamEvent = JSON.parse(envelope.payload);
+    const failedItemIds = new Set([itemId]);
+    const { sender, sentEvents } = createCapturingSender({
+      failSequenceNumbers: failedItemIds,
+    });
+    const handler = createHandler(sender);
+
+    const failedReplay = await handler(original);
+    expect(failedReplay.batchItemFailures).toEqual([
+      { itemIdentifier: "100000000000000000001" },
+    ]);
+    expect(sentEvents).toEqual([]);
+
+    failedItemIds.clear();
+    const successfulReplay = await handler(original);
+    expect(successfulReplay.batchItemFailures).toEqual([]);
+    expect(sentEvents).toMatchObject([
+      {
+        eventId: `item.created.v1:${itemId}`,
+        occurredAt: createdAt,
+        data: { itemId, name: "Example item" },
+      },
+    ]);
   });
 });
 

@@ -30,6 +30,16 @@ output "item_created_dispatcher_function_name" {
   value = aws_lambda_function.item_created_dispatcher.function_name
 }
 
+output "stream_failure_bucket_name" {
+  description = "Bucket that stores discarded Dispatcher Stream batches."
+  value       = aws_s3_bucket.stream_failures.bucket
+}
+
+output "item_created_dispatcher_mapping_uuid" {
+  description = "Stream mapping UUID used to locate its failure archive objects."
+  value       = aws_lambda_event_source_mapping.item_created_dispatcher.uuid
+}
+
 output "item_processing_worker_function_name" {
   value = aws_lambda_function.item_processing_worker.function_name
 }
@@ -57,6 +67,7 @@ output "cloudwatch_alarm_names" {
     aws_cloudwatch_metric_alarm.item_processing_worker_errors[*].alarm_name,
     aws_cloudwatch_metric_alarm.item_created_dispatcher_iterator_age[*].alarm_name,
     aws_cloudwatch_metric_alarm.item_created_dispatch_failures[*].alarm_name,
+    aws_cloudwatch_metric_alarm.item_created_destination_delivery_failures[*].alarm_name,
     aws_cloudwatch_metric_alarm.item_processing_permanent_failures[*].alarm_name,
     aws_cloudwatch_metric_alarm.item_processing_retryable_failures[*].alarm_name,
     values(aws_cloudwatch_metric_alarm.async_lambda_throttles)[*].alarm_name

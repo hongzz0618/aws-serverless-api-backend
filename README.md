@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/hongzz0618/aws-serverless-api-backend/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hongzz0618/aws-serverless-api-backend/actions/workflows/ci.yml)
 
-A TypeScript serverless API on AWS using API Gateway, six Lambda functions, DynamoDB, DynamoDB Streams, SQS, a DLQ, CloudWatch, Terraform, and GitHub Actions.
+A TypeScript serverless API on AWS using API Gateway, six Lambda functions, DynamoDB, DynamoDB Streams, SQS, S3, CloudWatch, Terraform, and GitHub Actions.
 
 The public API remains a CRUD interface for items. Item creation is durable before asynchronous post-create processing runs through the Stream, Dispatcher, queue, and Worker path.
 
@@ -15,6 +15,7 @@ The public API remains a CRUD interface for items. Item creation is durable befo
 - Deterministic event IDs for item-created work
 - Idempotent Worker conditional updates
 - Partial batch failure reporting
+- Bounded Stream retries, S3 failure capture, and manual replay
 - SQS retry and DLQ redrive
 - Structured logs and CloudWatch alarms
 - Terraform-managed infrastructure and reproducible Lambda packages
@@ -37,6 +38,8 @@ flowchart TB
     Delete --> Items
 
     Items -->|"DynamoDB Stream INSERT"| Dispatcher["item-created-dispatcher Lambda"]
+    Items -->|"Stream mapping discards a batch"| Archive[("S3 failure archive")]
+    Archive -. "operator replays reviewed records" .-> Dispatcher
     Dispatcher -->|"item.created.v1:<itemId>"| Queue["SQS standard queue"]
     Queue --> Worker["item-processing-worker Lambda"]
     Worker -->|"conditional COMPLETED update"| Items
@@ -214,6 +217,7 @@ Terraform configures:
 - Queue age monitoring
 - DLQ visible-message monitoring
 - DynamoDB Stream `IteratorAge` monitoring
+- Dispatcher `DestinationDeliveryFailures` monitoring for failed S3 writes
 - Application-level dispatch and processing failure metrics
 - A six-widget [async processing dashboard](docs/operations.md#async-processing-dashboard), available even when alarms are disabled
 - Lambda `Errors` and `Throttles` alarms
@@ -238,6 +242,8 @@ Two real AWS validation cycles were completed in `eu-west-1`:
 
 Both validation environments were destroyed after verification.
 
+Live AWS validation of the v1.0 Stream failure archive is pending. See the [live validation checklist](docs/deployment-validation.md#v10-live-aws-validation-checklist).
+
 Full evidence, validation notes, and the partial Apply recovery record are in [`docs/deployment-validation.md`](docs/deployment-validation.md).
 
 ![Async processing completed](docs/evidence/07-async-processing-completed.png)
@@ -248,7 +254,8 @@ Full evidence, validation notes, and the partial Apply recovery record are in [`
 
 - Async processing is eventually consistent after `POST /items`.
 - SQS Standard Queue provides at-least-once delivery, so Worker idempotency is required.
-- The DynamoDB Stream mapping has no finite retry count and no stream on-failure destination.
+- The Stream mapping uses three retries and a one-hour maximum record age. S3 retains successfully delivered failures for 30 days. Delivery failures or expired records can still prevent recovery.
+- `TRIM_HORIZON` is intended for a fresh, disposable deployment. Changing the starting position on an existing mapping requires replacement and can replay retained records.
 - Terraform uses local state unless another backend is configured.
 - Terraform manages the regional API Gateway CloudWatch role; review this account-level setting before using the configuration in a shared AWS account or region.
 - The repository does not include authentication, CORS, WAF, tracing, or a multi-environment layout.
@@ -273,6 +280,8 @@ Full evidence, validation notes, and the partial Apply recovery record are in [`
 </details>
 
 ## Cleanup
+
+Follow the [archive and teardown procedure](docs/operations.md#cleanup-and-teardown) before destroying resources. The S3 archive must be empty before Terraform can delete it.
 
 ```bash
 cd terraform

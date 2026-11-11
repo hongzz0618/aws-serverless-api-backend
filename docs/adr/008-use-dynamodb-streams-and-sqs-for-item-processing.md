@@ -70,7 +70,9 @@ Queue depth, queue age, DLQ visible messages, Worker logs, and application-level
 
 ## Failure and retry semantics
 
-The Dispatcher uses DynamoDB Stream batch failure reporting. A failed stream record can be retried from the failed sequence number.
+The Dispatcher uses DynamoDB Stream batch failure reporting with batch splitting. Retries start at the lowest failed sequence number and may send later records again.
+
+The v1.0 mapping uses three retries and a one-hour record-age limit. Lambda attempts to archive discarded Stream batches in a private, encrypted S3 bucket for 30 days. The S3 envelope carries the original Stream payload for inspection and [manual replay through the Dispatcher](../operations.md#stream-failure-archive-and-recovery). An alarm detects destination-delivery failures. The Worker applies its existing idempotency checks to replays.
 
 The Worker uses SQS partial batch failure reporting. Retryable failures leave the message available for retry. After repeated failures, the message moves to the DLQ.
 
@@ -78,10 +80,10 @@ DLQ redrive should happen only after the failure category and root cause are und
 
 ## Operational limitations
 
-The DynamoDB Stream mapping currently has no finite retry count and no stream on-failure destination. A poison Stream record can block shard progress until record expiry.
+The archive depends on successful delivery and has a finite lifetime. Operators must investigate delivery failures while the original Stream records remain available. `TRIM_HORIZON` is intended for a fresh deployment. Changing the starting position of an existing mapping requires replacement and can replay retained records.
 
 SQS event-source `maximum_concurrency = 2` limits consumption for this event source, but it does not reserve account-wide Lambda capacity.
 
 The design does not add multi-consumer fan-out, cross-service workflow state, or exactly-once delivery.
 
-This decision was validated against a deployed AWS API in `eu-west-1` at commit `30f14d4`. See [AWS Deployment Validation](../deployment-validation.md).
+The original async path and Worker DLQ were validated in `eu-west-1` at commit `30f14d4`. The v1.0 Stream archive and replay procedure await [live AWS validation](../deployment-validation.md#v10-live-aws-validation-checklist).

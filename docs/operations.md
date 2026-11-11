@@ -244,8 +244,9 @@ POST /items
 -> SQS standard queue
 -> Worker Lambda
 -> Item processingStatus = COMPLETED
--> repeated failures reach the DLQ
 ```
+
+The Stream mapping archives discarded batches in S3. The SQS processing queue moves repeatedly failed Worker messages to its own DLQ.
 
 The `creationMetadata` field is a snapshot derived from the item name at creation time. Later `PUT` requests do not recalculate that snapshot, and the worker does not modify the public API `version` field.
 
@@ -403,11 +404,69 @@ The Worker does not use reserved concurrency. The SQS event source mapping curre
 
 This limits consumption for this event source without reserving account-wide Lambda capacity. See [AWS deployment validation](deployment-validation.md) for the partial Apply and recovery record.
 
-## Known Stream Limitation
+## Stream Failure Archive and Recovery
 
-The DynamoDB Stream mapping currently has no finite retry count and no stream on-failure destination. A poison record that keeps failing can block its shard until the record expires. IteratorAge and dispatcher handled-failure alarms are the operational signals for this trade-off.
+The Stream mapping attempts up to three retries for function failures and discards records once the retry quota or the one-hour record-age limit is reached. Throttling before invocation does not consume the retry quota, and splitting a batch does not count as a retry. Lambda attempts to write discarded batches and invocation metadata to the encrypted S3 archive. The Worker DLQ holds `item.created.v1` messages already sent to SQS. Use SQS redrive for those messages and the procedure below for archived Stream records. See [AWS Stream error handling](https://docs.aws.amazon.com/lambda/latest/dg/services-dynamodb-errors.html).
 
-This first async version accepts that limitation to keep the service count small. Do not add a second failure queue unless the architecture is intentionally changed in a later phase.
+`TRIM_HORIZON` is the starting position for a fresh, disposable deployment. Changing `starting_position` on an existing mapping requires replacement with the locked provider and can replay retained INSERT records. Review the plan before applying this configuration to any existing environment.
+
+### Investigate and review an archived batch
+
+Run from the Terraform directory for the target deployment with the AWS CLI and `jq`. Verify the AWS account and Region first. Use an operator identity with mapping inspection, archive listing and reading, Dispatcher invocation, and access to processing logs and item state. Archive payloads contain full Stream images. Inspect them in a private workspace and keep raw contents out of logs and shared evidence.
+
+```bash
+archive_bucket="$(terraform output -raw stream_failure_bucket_name)"
+mapping_uuid="$(terraform output -raw item_created_dispatcher_mapping_uuid)"
+dispatcher_name="$(terraform output -raw item_created_dispatcher_function_name)"
+stream_arn="$(aws lambda get-event-source-mapping --uuid "$mapping_uuid" --query EventSourceArn --output text)"
+aws s3api list-objects-v2 --bucket "$archive_bucket" --prefix "aws/lambda/$mapping_uuid/"
+```
+
+Choose an object key and download it to a private directory. If a mapping was replaced, search under `aws/lambda/` for objects from the previous UUID and verify their source before replay. Stop on any failed command.
+
+```bash
+umask 077
+replay_dir="$(mktemp -d)"
+object_key='<reviewed archive key>'
+aws s3api get-object --bucket "$archive_bucket" --key "$object_key" "$replay_dir/envelope.json"
+jq '{requestContext, responseContext, DDBStreamBatchInfo}' "$replay_dir/envelope.json"
+jq -e --arg stream "$stream_arn" '
+  select(.DDBStreamBatchInfo.streamArn == $stream)
+  | .payload | fromjson
+  | select(.Records | (type == "array" and length > 0))
+' "$replay_dir/envelope.json" > "$replay_dir/stream-event.json"
+```
+
+Use the failure reason, request ID, and sequence range to correlate with Dispatcher logs. Fix the cause before replay. Review each record's source ARN, operation, sequence number, and `NewImage`. Confirm that `id`, `name`, and `createdAt` form a valid creation event and check the item's current processing state. Keep malformed records for investigation. A later record may already have been dispatched successfully. A record for a deleted item can be skipped.
+
+### Replay one reviewed record
+
+Select the original sequence number as a string. Keep the original record fields, including the item ID and creation timestamp, so the Dispatcher produces the same domain event ID and `occurredAt`.
+
+```bash
+sequence='<reviewed sequence number>'
+jq -e --arg sequence "$sequence" --arg stream "$stream_arn" '
+  {Records: [.Records[] | select(
+    .eventSource == "aws:dynamodb" and .eventSourceARN == $stream and
+    .eventName == "INSERT" and .dynamodb.SequenceNumber == $sequence
+  )]}
+  | select(.Records | length == 1)
+' "$replay_dir/stream-event.json" > "$replay_dir/replay.json" &&
+aws lambda invoke --function-name "$dispatcher_name" --invocation-type RequestResponse \
+  --payload "fileb://$replay_dir/replay.json" "$replay_dir/response.json" > "$replay_dir/invoke.json" &&
+jq -e '.StatusCode == 200 and (has("FunctionError") | not)' "$replay_dir/invoke.json" &&
+jq -e '.batchItemFailures == []' "$replay_dir/response.json"
+```
+
+Treat an invocation error, a missing response, or any returned `batchItemFailures` as unresolved. Direct invocation does not inherit automatic Stream retries, age limits, or S3 delivery. Keep the archive object and investigate before trying again. Submit the decoded Stream record to the Dispatcher. The Worker queue expects a domain event, and `POST /items` would create a new item.
+
+An empty failure list confirms Dispatcher acceptance of the reviewed record. Verify the Worker result separately using the original item ID and event ID. Expect `COMPLETED` with the original event ID in `processedEventId`, a duplicate log for an already completed item, or a skip if the item was deleted. Investigate items that remain `PENDING`, including any Worker DLQ entry. Record the outcome and retain the archive until its lifecycle expires or disposal is approved.
+
+### Destination delivery failures and retention
+
+If the Dispatcher's `DestinationDeliveryFailures` alarm fires, check the mapping's current destination ARN, bucket existence and ownership, execution-role permissions, and explicit policy denies. Use the Dispatcher logs and Stream sequence information to find affected records. Restoring access does not prove earlier records reached S3. If missing records still exist in the Stream, recover their original payloads before the 24-hour Stream retention limit. If neither source has the payload, treat recovery as incomplete. Current item state may differ from its original creation image.
+
+The archive expires objects after 30 days. S3 protects batches it successfully receives. Polling gaps, Stream expiry, and failed archive writes can still leave unrecoverable records. Without configured alarm actions, review alarms and archive contents manually.
 
 ## Async Processing Dashboard
 
@@ -537,7 +596,9 @@ The application logs expose `errorName`, but intentionally do not expose the raw
 
 ## Cleanup and Teardown
 
-Remove the Terraform-managed resources with:
+Stop writes and let in-flight work settle. Review the archive, preserve any evidence needed for recovery in approved private storage, and get approval before deleting retained objects. Remove the Stream mapping or detach its failure destination and verify the change in AWS before emptying or deleting the bucket. Check pending items and the Worker DLQ before proceeding.
+
+The archive uses `force_destroy = false`. A nonempty bucket can cause Terraform destroy to stop after other resources have already been removed. Empty the archive deliberately only after retention and evidence decisions are complete. Remove the remaining Terraform-managed resources with:
 
 ```bash
 cd terraform
@@ -551,6 +612,7 @@ After teardown:
 * Confirm the API Gateway API is gone.
 * Confirm the Lambda functions are gone.
 * Confirm the two DynamoDB tables are gone.
+* Confirm the Stream mapping and failure archive are gone.
 * Confirm Terraform-managed CloudWatch log groups and alarms were removed.
 * Check for manually created or externally managed resources that were not part of the Terraform state.
 

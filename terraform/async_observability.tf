@@ -94,6 +94,26 @@ resource "aws_cloudwatch_metric_alarm" "item_created_dispatch_failures" {
   alarm_actions       = var.alarm_actions
 }
 
+resource "aws_cloudwatch_metric_alarm" "item_created_destination_delivery_failures" {
+  count = var.enable_alarms ? 1 : 0
+
+  alarm_name          = "${var.project_name}-item-created-destination-delivery-failures"
+  alarm_description   = "Lambda could not deliver one or more discarded DynamoDB Stream batches to the S3 failure archive."
+  namespace           = "AWS/Lambda"
+  metric_name         = "DestinationDeliveryFailures"
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.alarm_actions
+
+  dimensions = {
+    FunctionName = aws_lambda_function.item_created_dispatcher.function_name
+  }
+}
+
 resource "aws_cloudwatch_metric_alarm" "item_processing_permanent_failures" {
   count = var.enable_alarms ? 1 : 0
 

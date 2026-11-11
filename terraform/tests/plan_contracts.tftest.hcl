@@ -6,6 +6,28 @@ variables {
   alarm_actions = ["arn:aws:sns:us-east-1:123456789012:serverless-api-alerts"]
 }
 
+override_data {
+  target          = data.aws_caller_identity.current
+  override_during = plan
+  values          = { account_id = "123456789012" }
+}
+
+override_resource {
+  target          = aws_s3_bucket.stream_failures
+  override_during = plan
+  values = {
+    bucket = "serverless-api-example-failure-archive"
+    id     = "serverless-api-example-failure-archive"
+    arn    = "arn:aws:s3:::serverless-api-example-failure-archive"
+  }
+}
+
+override_resource {
+  target          = aws_lambda_event_source_mapping.item_created_dispatcher
+  override_during = plan
+  values          = { uuid = "6cb6f055-09dc-4f28-b201-d971a6ed8d1c" }
+}
+
 override_resource {
   target = aws_api_gateway_rest_api.api
 
@@ -652,6 +674,100 @@ run "async_iam_contract" {
   }
 }
 
+run "stream_failure_archive_contract" {
+  command = plan
+
+  variables {
+    project_name = "amzn-s3-demo-abcdefghijklmnopqrstuv"
+  }
+
+  assert {
+    condition = (
+      startswith(aws_s3_bucket.stream_failures.bucket_prefix, "stream-fail-") &&
+      length(aws_s3_bucket.stream_failures.bucket_prefix) + 26 <= 63 &&
+      aws_s3_bucket.stream_failures.force_destroy == false
+    )
+    error_message = "The generated archive name must fit the S3 limit at maximum project name length, and deletion must protect retained objects."
+  }
+
+  assert {
+    condition = (
+      aws_s3_bucket_public_access_block.stream_failures.bucket == aws_s3_bucket.stream_failures.id &&
+      aws_s3_bucket_public_access_block.stream_failures.block_public_acls &&
+      aws_s3_bucket_public_access_block.stream_failures.block_public_policy &&
+      aws_s3_bucket_public_access_block.stream_failures.ignore_public_acls &&
+      aws_s3_bucket_public_access_block.stream_failures.restrict_public_buckets
+    )
+    error_message = "All public access controls must apply to the archive."
+  }
+
+  assert {
+    condition = (
+      aws_s3_bucket_ownership_controls.stream_failures.bucket == aws_s3_bucket.stream_failures.id &&
+      one(aws_s3_bucket_ownership_controls.stream_failures.rule).object_ownership == "BucketOwnerEnforced" &&
+      aws_s3_bucket_server_side_encryption_configuration.stream_failures.bucket == aws_s3_bucket.stream_failures.id &&
+      one(one(aws_s3_bucket_server_side_encryption_configuration.stream_failures.rule).apply_server_side_encryption_by_default).sse_algorithm == "AES256"
+    )
+    error_message = "The archive must disable ACLs and use SSE-S3."
+  }
+
+  assert {
+    condition = (
+      aws_s3_bucket_lifecycle_configuration.stream_failures.bucket == aws_s3_bucket.stream_failures.id &&
+      one(aws_s3_bucket_lifecycle_configuration.stream_failures.rule).status == "Enabled" &&
+      one(one(aws_s3_bucket_lifecycle_configuration.stream_failures.rule).expiration).days == 30 &&
+      length(one(aws_s3_bucket_lifecycle_configuration.stream_failures.rule).filter) == 1
+    )
+    error_message = "The archive must expire its objects after 30 days."
+  }
+
+  assert {
+    condition = (
+      aws_s3_bucket_policy.stream_failures.bucket == aws_s3_bucket.stream_failures.id &&
+      one(jsondecode(aws_s3_bucket_policy.stream_failures.policy).Statement).Effect == "Deny" &&
+      one(jsondecode(aws_s3_bucket_policy.stream_failures.policy).Statement).Principal == "*" &&
+      one(jsondecode(aws_s3_bucket_policy.stream_failures.policy).Statement).Action == "s3:*" &&
+      toset(one(jsondecode(aws_s3_bucket_policy.stream_failures.policy).Statement).Resource) == toset([
+        aws_s3_bucket.stream_failures.arn, "${aws_s3_bucket.stream_failures.arn}/*"
+      ]) &&
+      one(jsondecode(aws_s3_bucket_policy.stream_failures.policy).Statement).Condition.Bool["aws:SecureTransport"] == "false"
+    )
+    error_message = "The bucket policy must deny insecure transport for the archive and its objects."
+  }
+
+  assert {
+    condition = {
+      for statement in jsondecode(aws_iam_role_policy.item_created_dispatcher.policy).Statement :
+      join(",", statement.Action) => {
+        effect   = statement.Effect
+        resource = statement.Resource
+        account  = statement.Condition.StringEquals["s3:ResourceAccount"]
+      }
+      if anytrue([for action in statement.Action : startswith(action, "s3:") || action == "*"])
+      } == {
+      "s3:ListBucket" = {
+        effect   = "Allow"
+        resource = aws_s3_bucket.stream_failures.arn
+        account  = data.aws_caller_identity.current.account_id
+      }
+      "s3:PutObject" = {
+        effect   = "Allow"
+        resource = "${aws_s3_bucket.stream_failures.arn}/*"
+        account  = data.aws_caller_identity.current.account_id
+      }
+    }
+    error_message = "Dispatcher S3 access must only allow same-account archive listing and writes."
+  }
+
+  assert {
+    condition = (
+      output.stream_failure_bucket_name == aws_s3_bucket.stream_failures.bucket &&
+      output.item_created_dispatcher_mapping_uuid == aws_lambda_event_source_mapping.item_created_dispatcher.uuid
+    )
+    error_message = "Recovery outputs must identify the destination bucket and Stream mapping."
+  }
+}
+
 run "async_event_source_mapping_contract" {
   command = plan
 
@@ -666,13 +782,22 @@ run "async_event_source_mapping_contract" {
   assert {
     condition = (
       aws_lambda_event_source_mapping.item_created_dispatcher.enabled == true &&
-      aws_lambda_event_source_mapping.item_created_dispatcher.starting_position == "LATEST" &&
+      aws_lambda_event_source_mapping.item_created_dispatcher.starting_position == "TRIM_HORIZON" &&
       aws_lambda_event_source_mapping.item_created_dispatcher.batch_size == 10 &&
       aws_lambda_event_source_mapping.item_created_dispatcher.bisect_batch_on_function_error == true &&
       length(aws_lambda_event_source_mapping.item_created_dispatcher.function_response_types) == 1 &&
       contains(aws_lambda_event_source_mapping.item_created_dispatcher.function_response_types, "ReportBatchItemFailures")
     )
     error_message = "The dispatcher event source mapping must be enabled and configured for safe partial batch retries."
+  }
+
+  assert {
+    condition = (
+      aws_lambda_event_source_mapping.item_created_dispatcher.maximum_retry_attempts == 3 &&
+      aws_lambda_event_source_mapping.item_created_dispatcher.maximum_record_age_in_seconds == 3600 &&
+      one(one(aws_lambda_event_source_mapping.item_created_dispatcher.destination_config).on_failure).destination_arn == aws_s3_bucket.stream_failures.arn
+    )
+    error_message = "The Stream mapping must bound retries and record age and route discarded batches to S3."
   }
 
   assert {
@@ -702,6 +827,23 @@ run "async_event_source_mapping_contract" {
 
 run "async_alarm_contract" {
   command = plan
+
+  assert {
+    condition = (
+      one(aws_cloudwatch_metric_alarm.item_created_destination_delivery_failures).namespace == "AWS/Lambda" &&
+      one(aws_cloudwatch_metric_alarm.item_created_destination_delivery_failures).metric_name == "DestinationDeliveryFailures" &&
+      one(aws_cloudwatch_metric_alarm.item_created_destination_delivery_failures).dimensions.FunctionName == aws_lambda_function.item_created_dispatcher.function_name &&
+      one(aws_cloudwatch_metric_alarm.item_created_destination_delivery_failures).statistic == "Sum" &&
+      one(aws_cloudwatch_metric_alarm.item_created_destination_delivery_failures).period == 300 &&
+      one(aws_cloudwatch_metric_alarm.item_created_destination_delivery_failures).evaluation_periods == 1 &&
+      one(aws_cloudwatch_metric_alarm.item_created_destination_delivery_failures).threshold == 1 &&
+      one(aws_cloudwatch_metric_alarm.item_created_destination_delivery_failures).comparison_operator == "GreaterThanOrEqualToThreshold" &&
+      one(aws_cloudwatch_metric_alarm.item_created_destination_delivery_failures).treat_missing_data == "notBreaching" &&
+      toset(one(aws_cloudwatch_metric_alarm.item_created_destination_delivery_failures).alarm_actions) == toset(var.alarm_actions) &&
+      contains(output.cloudwatch_alarm_names, one(aws_cloudwatch_metric_alarm.item_created_destination_delivery_failures).alarm_name)
+    )
+    error_message = "Destination delivery failures must alarm for the Dispatcher and use configured notification actions."
+  }
 
   assert {
     condition = (
@@ -998,6 +1140,7 @@ run "async_dashboard_without_alarms_in_another_region" {
   assert {
     condition = (
       length(output.cloudwatch_alarm_names) == 0 &&
+      length(aws_cloudwatch_metric_alarm.item_created_destination_delivery_failures) == 0 &&
       aws_cloudwatch_dashboard.async_item_processing.dashboard_name == "dashboard-check-eu-west-1-async-item-processing" &&
       output.async_item_processing_dashboard_name == aws_cloudwatch_dashboard.async_item_processing.dashboard_name &&
       length(jsondecode(aws_cloudwatch_dashboard.async_item_processing.dashboard_body).widgets) == 6 &&

@@ -162,3 +162,16 @@ API Gateway, Lambda, DynamoDB, the main queue, and the DLQ were confirmed remove
 The validation environment was destroyed.
 
 The API and async queues are no longer publicly available.
+
+## v1.0 Live AWS Validation Checklist
+
+Pending post-travel validation in a fresh, disposable environment with synthetic data. Record new evidence with its own commit and Region.
+
+- [ ] Review the Terraform plan with provider `5.100.0`. Confirm the disposable account, Region, regional API Gateway settings, mapping start position, and expected resource changes before deployment. Stop if the plan replaces an existing mapping or affects unrelated resources.
+- [ ] Run the CRUD smoke test, including create replay and stale-version conflict. Create a separate item and verify the INSERT reaches SQS and the Worker completes processing.
+- [ ] In the disposable deployment, induce a persistent Dispatcher send failure for a valid synthetic INSERT. Verify retry exhaustion, archive metadata, and the intact original Stream payload. Restore dispatch and check that subsequent records progress. In a separate controlled exercise, verify behavior when a record exceeds the one-hour age limit while it remains in the Stream.
+- [ ] Briefly deny archive writes for a separate synthetic failure, then verify `DestinationDeliveryFailures` and the alarm state. Restore permission, confirm a subsequent failure can be archived, and resolve any missing payload while the Stream record is available. Check notification delivery if alarm actions are configured.
+- [ ] Follow the [manual recovery procedure](operations.md#stream-failure-archive-and-recovery). Verify an empty `batchItemFailures` list and Worker completion. Replay the same archived record again and confirm `processedEventId`, `processedAt`, and public `version` remain stable.
+- [ ] Exercise the existing Worker DLQ and redrive on a separate item. Verify that the DLQ holds the domain event and the item completes after restoring Worker access and redriving.
+- [ ] Verify S3 public access blocking, ACL disabling, encryption, TLS policy, scoped Dispatcher permissions, and the 30-day lifecycle rule. Review costs for CloudWatch, S3, and test traffic. Keep raw payloads out of published evidence.
+- [ ] Follow the [teardown procedure](operations.md#cleanup-and-teardown). Confirm mapping detachment or removal before disposing of approved archive contents. Verify that Terraform state and the disposable AWS resources are empty after cleanup.

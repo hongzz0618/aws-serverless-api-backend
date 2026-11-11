@@ -6,6 +6,74 @@ locals {
   item_processing_worker_maximum_concurrency       = 2
 }
 
+data "aws_caller_identity" "current" {}
+
+resource "aws_s3_bucket" "stream_failures" {
+  # Keep the prefix within 37 characters and outside S3's reserved namespaces.
+  bucket_prefix = "stream-fail-${substr(var.project_name, 0, 24)}-"
+  force_destroy = false
+
+  tags = {
+    Name = "${var.project_name}-stream-failures"
+  }
+}
+
+resource "aws_s3_bucket_ownership_controls" "stream_failures" {
+  bucket = aws_s3_bucket.stream_failures.id
+
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "stream_failures" {
+  bucket = aws_s3_bucket.stream_failures.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "stream_failures" {
+  bucket = aws_s3_bucket.stream_failures.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "stream_failures" {
+  bucket = aws_s3_bucket.stream_failures.id
+
+  rule {
+    id     = "expire-stream-failures"
+    status = "Enabled"
+    filter {}
+
+    expiration {
+      days = 30
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "stream_failures" {
+  bucket = aws_s3_bucket.stream_failures.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "DenyInsecureTransport"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource  = [aws_s3_bucket.stream_failures.arn, "${aws_s3_bucket.stream_failures.arn}/*"]
+      Condition = { Bool = { "aws:SecureTransport" = "false" } }
+    }]
+  })
+}
+
 resource "aws_sqs_queue" "item_processing_dlq" {
   name                       = "${var.project_name}-item-processing-dlq"
   fifo_queue                 = false
@@ -84,6 +152,22 @@ resource "aws_iam_role_policy" "item_created_dispatcher" {
         Effect   = "Allow"
         Action   = ["sqs:SendMessage"]
         Resource = aws_sqs_queue.item_processing.arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = aws_s3_bucket.stream_failures.arn
+        Condition = {
+          StringEquals = { "s3:ResourceAccount" = data.aws_caller_identity.current.account_id }
+        }
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = "${aws_s3_bucket.stream_failures.arn}/*"
+        Condition = {
+          StringEquals = { "s3:ResourceAccount" = data.aws_caller_identity.current.account_id }
+        }
       },
       {
         Effect = "Allow"
@@ -190,10 +274,18 @@ resource "aws_lambda_event_source_mapping" "item_created_dispatcher" {
   event_source_arn               = aws_dynamodb_table.items.stream_arn
   function_name                  = aws_lambda_function.item_created_dispatcher.arn
   enabled                        = true
-  starting_position              = "LATEST"
+  starting_position              = "TRIM_HORIZON"
   batch_size                     = 10
   bisect_batch_on_function_error = true
   function_response_types        = ["ReportBatchItemFailures"]
+  maximum_retry_attempts         = 3
+  maximum_record_age_in_seconds  = 3600
+
+  destination_config {
+    on_failure {
+      destination_arn = aws_s3_bucket.stream_failures.arn
+    }
+  }
 
   filter_criteria {
     filter {
@@ -205,7 +297,12 @@ resource "aws_lambda_event_source_mapping" "item_created_dispatcher" {
 
   depends_on = [
     aws_iam_role_policy.item_created_dispatcher,
-    aws_cloudwatch_log_group.item_created_dispatcher
+    aws_cloudwatch_log_group.item_created_dispatcher,
+    aws_s3_bucket_ownership_controls.stream_failures,
+    aws_s3_bucket_public_access_block.stream_failures,
+    aws_s3_bucket_server_side_encryption_configuration.stream_failures,
+    aws_s3_bucket_lifecycle_configuration.stream_failures,
+    aws_s3_bucket_policy.stream_failures
   ]
 }
 
